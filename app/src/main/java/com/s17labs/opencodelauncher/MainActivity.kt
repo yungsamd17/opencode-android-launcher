@@ -1,15 +1,19 @@
 package com.s17labs.opencodelauncher
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -17,6 +21,8 @@ import com.s17labs.opencodelauncher.runtime.BootstrapState
 import com.s17labs.opencodelauncher.runtime.GuestSetup
 import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
 import com.s17labs.opencodelauncher.service.OpenCodeForegroundService
+import com.s17labs.opencodelauncher.service.OpenCodeStatus
+import com.s17labs.opencodelauncher.service.Power
 import com.s17labs.opencodelauncher.ui.HomeScreen
 import com.s17labs.opencodelauncher.ui.OpenCodeLauncherTheme
 import com.s17labs.opencodelauncher.ui.SettingsScreen
@@ -34,11 +40,15 @@ object Routes {
 class MainActivity : ComponentActivity() {
 
     private var bootstrapState: BootstrapState by mutableStateOf(BootstrapState.NotStarted)
-    private var boundUrl: String? by mutableStateOf(null)
-    private var status: String by mutableStateOf("Stopped")
     private var guestStatus: String by mutableStateOf("Packages: not installed")
-    private var logText: String by mutableStateOf("Phase 1 done (proot-ok on-device). Phase 2 installs guest packages here.")
+    private var batteryExempt: Boolean by mutableStateOf(false)
+    private var serviceLog: String by mutableStateOf("")
+    private var logText: String by mutableStateOf("Phase 2 done (opencode 1.18.30 on-device). Phase 3 runs it as a service.")
     private val io = CoroutineScope(Dispatchers.IO)
+
+    private val notifPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* result only gates the notification shade, not the service */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +68,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             OpenCodeLauncherTheme {
                 val nav = rememberNavController()
+                val svc by OpenCodeStatus.state.collectAsStateWithLifecycle()
+                val (statusText, boundUrl, detail) = when (val s = svc) {
+                    is OpenCodeStatus.Value.Stopped -> Triple("Stopped", null, null)
+                    is OpenCodeStatus.Value.Starting -> Triple("Starting…", null, null)
+                    is OpenCodeStatus.Value.Running -> Triple("Running", s.url, null)
+                    is OpenCodeStatus.Value.Failed -> Triple("Failed", null, s.message)
+                }
                 NavHost(navController = nav, startDestination = Routes.HOME) {
                     composable(Routes.SETUP) {
                         SetupScreen(
@@ -74,9 +91,10 @@ class MainActivity : ComponentActivity() {
                     }
                     composable(Routes.HOME) {
                         HomeScreen(
-                            status = status,
+                            status = statusText,
                             boundUrl = boundUrl,
-                            onOpenOpenCode = { openInBrowser() },
+                            detail = detail,
+                            onOpenOpenCode = { openInBrowser(boundUrl) },
                             onStartService = { startOpencodeService() },
                             onStopService = { stopOpencodeService() },
                             onGoSetup = { nav.navigate(Routes.SETUP) },
@@ -86,8 +104,11 @@ class MainActivity : ComponentActivity() {
                     composable(Routes.SETTINGS) {
                         SettingsScreen(
                             logText = logText,
+                            serviceLog = serviceLog,
+                            batteryExempt = batteryExempt,
                             onWipeRootfs = { wipeRootfs() },
                             onShareLog = { shareLog() },
+                            onBatteryExemption = { Power.requestExemption(this@MainActivity) },
                             onBack = { nav.popBackStack() }
                         )
                     }
@@ -210,20 +231,52 @@ class MainActivity : ComponentActivity() {
         runOnUiThread { logText = (logText + "\n" + msg).takeLast(6000) }
     }
 
+    override fun onResume() {
+        super.onResume()
+        refreshDerivedState()
+    }
+
+    /** Refresh cheap derived state (guest marker, battery exemption, service log tail). */
+    private fun refreshDerivedState() {
+        io.launch {
+            val guest = try {
+                val m = java.io.File(filesDir, "proot-env/.guest-setup-done")
+                if (m.exists()) "Packages: ${m.readText().trim()}" else "Packages: not installed"
+            } catch (_: Exception) { "Packages: unknown" }
+            val exempt = Power.isExempt(this@MainActivity)
+            val slog = try {
+                val f = java.io.File(filesDir, "opencode-service.log")
+                if (f.exists()) f.readText().takeLast(4000) else ""
+            } catch (_: Exception) { "" }
+            runOnUiThread {
+                guestStatus = guest
+                batteryExempt = exempt
+                serviceLog = slog
+            }
+        }
+    }
+
     private fun startOpencodeService() {
-        status = "Starting…"
+        // Notification shade permission (Android 13+): request, but start anyway.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // Battery exemption is explicit: one system dialog, user decides.
+        // Doze would otherwise kill the server within the hour.
+        if (!Power.isExempt(this)) {
+            Power.requestExemption(this)
+        }
         startForegroundService(OpenCodeForegroundService.startIntent(this))
-        status = "Service requested (Phase 3 runs opencode web here)"
     }
 
     private fun stopOpencodeService() {
         startService(OpenCodeForegroundService.stopIntent(this))
-        status = "Stopped"
-        boundUrl = null
     }
 
-    private fun openInBrowser() {
-        val url = boundUrl ?: return
+    private fun openInBrowser(url: String?) {
+        url ?: return
         try {
             val tabs = CustomTabsIntent.Builder().build()
             tabs.launchUrl(this, url.toUri())

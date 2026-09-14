@@ -2,6 +2,7 @@ package com.s17labs.opencodelauncher
 
 import com.s17labs.opencodelauncher.runtime.AlpineCatalog
 import com.s17labs.opencodelauncher.runtime.GuestSetup
+import com.s17labs.opencodelauncher.service.OpenCodeForegroundService
 import com.s17labs.opencodelauncher.runtime.ProotRunner
 import com.s17labs.opencodelauncher.runtime.ProotSetup
 import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
@@ -82,8 +83,7 @@ class BootstrapLogicTest {
     }
 
     @Test
-    fun guestShellAnchorsOnBusyboxFile() {
-        // Regression: Alpine's bin/sh is an ABSOLUTE symlink (sh -> /bin/busybox),
+    fun guestShellAnchorsOnBusyboxFile() {        // Regression: Alpine's bin/sh is an ABSOLUTE symlink (sh -> /bin/busybox),
         // which never host-resolves. A rootfs with marker + busybox but a
         // dangling bin/sh must count as bootstrapped.
         val dir = createTempDir("rootfs")
@@ -94,5 +94,24 @@ class BootstrapLogicTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun serverUrlPrefersLoopback() {
+        assertEquals(
+            "http://localhost:4096",
+            OpenCodeForegroundService.pickUrl("Local access: http://localhost:4096")
+        )
+        assertEquals(
+            "http://127.0.0.1:4096",
+            OpenCodeForegroundService.pickUrl("listening on http://127.0.0.1:4096")
+        )
+        assertEquals(
+            "http://localhost:4096",
+            OpenCodeForegroundService.pickUrl(
+                "Network access: http://192.168.1.100:4096 Local access: http://localhost:4096"
+            )
+        )
+        assertNull(OpenCodeForegroundService.pickUrl("no url here"))
     }
 }

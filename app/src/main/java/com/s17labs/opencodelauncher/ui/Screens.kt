@@ -90,6 +90,7 @@ fun SetupScreen(
 fun HomeScreen(
     status: String,
     boundUrl: String?,
+    detail: String? = null,
     onOpenOpenCode: () -> Unit,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
@@ -105,6 +106,7 @@ fun HomeScreen(
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Status: $status", style = MaterialTheme.typography.titleMedium)
                 Text(boundUrl ?: "URL appears here once opencode web is running.")
+                if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall)
             }
         }
         Button(onClick = onOpenOpenCode, enabled = boundUrl != null, modifier = Modifier.fillMaxWidth()) {
@@ -132,8 +134,11 @@ fun HomeScreen(
 @Composable
 fun SettingsScreen(
     logText: String,
+    serviceLog: String,
+    batteryExempt: Boolean,
     onWipeRootfs: () -> Unit,
     onShareLog: () -> Unit,
+    onBatteryExemption: () -> Unit,
     onBack: () -> Unit
 ) {
     Column(
@@ -141,6 +146,31 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Battery optimization", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (batteryExempt) "Exempt — the server survives Doze."
+                    else "Not exempt — the system may kill the server. Tap below for the system dialog.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (!batteryExempt) {
+                    OutlinedButton(onClick = onBatteryExemption, modifier = Modifier.fillMaxWidth()) {
+                        Text("Request exemption")
+                    }
+                }
+            }
+        }
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Server log", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    serviceLog.ifBlank { "Empty — start the service from Home." },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                )
+            }
+        }
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Logs", style = MaterialTheme.typography.titleMedium)

@@ -8,9 +8,10 @@ Full plan: `opencode-android-launcher-plan.md`. Agent rules: `AGENTS.md`.
 ## Status
 
 Phase 1 done and verified on a real aarch64 phone (`proot <rootfs> /bin/sh`
-prints `proot-ok`, exit 0). Phase 2 in progress: guest `apk add nodejs npm
-git openssh` + `npm install -g opencode-ai` via the Setup screen's
-"Install Node + OpenCode" button.
+prints `proot-ok`, exit 0). Phase 2 done (guest `node=v24 npm=11
+opencode=1.18` via `apk` + npm). Phase 3 in progress: foreground service
+running `opencode web --hostname 127.0.0.1 --port 4096` with auto-restart,
+persistent notification, and an "Open OpenCode" browser handoff.
 
 ## Build (CI)
 

@@ -9,22 +9,35 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.s17labs.opencodelauncher.MainActivity
+import com.s17labs.opencodelauncher.runtime.GuestSetup
+import com.s17labs.opencodelauncher.runtime.ProotRunner
+import com.s17labs.opencodelauncher.runtime.ProotSetup
+import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Phase 0 stub. Phase 3 will:
- * - start `opencode web --hostname 127.0.0.1 --port <port>` via proot exec
- * - capture stdout to find the bound URL/port
- * - auto-restart on unexpected death, not on user-initiated stop
+ * Phase 3: owns the `opencode web` guest process lifecycle.
  *
- * Pattern mirrors RevNotify's persistent-notification approach:
- * explicit start/stop, restart-on-crash but not restart-on-user-stop.
+ * - Starts `opencode web --hostname 127.0.0.1 --port 4096` via proot exec
+ *   (fixed port per plan decision; stdout is still parsed for the real URL
+ *   in case the server reports a different one).
+ * - Persistent notification with a Stop action; tap returns to the app.
+ * - Restarts on unexpected death with backoff; gives up after 5 rapid deaths
+ *   (<15s uptime each) and reports Failed instead of hot-looping.
+ * - Never auto-restarts after user-initiated stop.
+ * - Publishes state to [OpenCodeStatus] (same process) for the Compose UI.
  */
 class OpenCodeForegroundService : Service() {
 
@@ -33,48 +46,228 @@ class OpenCodeForegroundService : Service() {
         const val NOTIF_ID = 1001
         const val ACTION_START = "com.s17labs.opencodelauncher.action.START"
         const val ACTION_STOP = "com.s17labs.opencodelauncher.action.STOP"
+        const val PORT = 4096
+        const val HOST = "127.0.0.1"
+
+        private val URL_RE = Regex("""https?://[^\s'"]+""")
 
         fun startIntent(ctx: Context): Intent =
             Intent(ctx, OpenCodeForegroundService::class.java).setAction(ACTION_START)
 
         fun stopIntent(ctx: Context): Intent =
             Intent(ctx, OpenCodeForegroundService::class.java).setAction(ACTION_STOP)
+
+        /** Prefer loopback URLs from server output; fall back to any URL line. */
+        fun pickUrl(line: String): String? {
+            val all = URL_RE.findAll(line)
+                .map { it.value.trimEnd('.', ',', ')', ';') }
+                .toList()
+            return all.firstOrNull { it.contains("127.0.0.1") || it.contains("localhost") }
+                ?: all.firstOrNull()
+        }
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
-    private var userStopped = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var supervisor: Job? = null
+
+    @Volatile private var userStopped = false
+    @Volatile private var proc: Process? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
+        rotateLogIfHuge()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                userStopped = true
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                shutdown(userInitiated = true)
                 return START_NOT_STICKY
             }
             ACTION_START -> {
+                if (supervisor?.isActive == true) return START_STICKY
                 userStopped = false
                 startForeground(NOTIF_ID, buildNotification("Starting OpenCode…"))
-                scope.launch {
-                    // Phase 3: exec proot + opencode web here, update notification with URL.
-                }
+                OpenCodeStatus.set(OpenCodeStatus.Value.Starting)
+                supervisor = scope.launch { supervise() }
             }
         }
-        // Restart on crash, but onStartCommand re-entry after user stop does nothing
-        // because userStopped is only reset on explicit START.
-        return if (userStopped) START_NOT_STICKY else START_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
-        scope.cancel()
+        try {
+            proc?.destroyForcibly()
+        } catch (_: Exception) {}
+        supervisor?.cancel()
         super.onDestroy()
+    }
+
+    private fun shutdown(userInitiated: Boolean) {
+        if (userInitiated) userStopped = true
+        supervisor?.cancel()
+        supervisor = null
+        try {
+            proc?.destroyForcibly()
+        } catch (_: Exception) {}
+        proc = null
+        if (userInitiated) OpenCodeStatus.set(OpenCodeStatus.Value.Stopped)
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } catch (_: Exception) {}
+        stopSelf()
+    }
+
+    private suspend fun supervise() {
+        var quickDeaths = 0
+        while (scope.isActive && !userStopped) {
+            val startedAt = SystemClock.elapsedRealtime()
+            val exit = startOnce()
+            if (!scope.isActive || userStopped) break
+            if (exit == null) {
+                // Fatal (missing prereqs / spawn failure already reported) — stop, don't loop.
+                shutdown(userInitiated = false)
+                break
+            }
+            val uptime = SystemClock.elapsedRealtime() - startedAt
+            if (uptime < 15_000) quickDeaths++ else quickDeaths = 0
+            appendServiceLog("opencode web exited ($exit) after ${uptime / 1000}s")
+            if (quickDeaths >= 5) {
+                val msg = "opencode web keeps dying — see Settings log, then Retry from Home"
+                OpenCodeStatus.set(OpenCodeStatus.Value.Failed(msg))
+                updateNotification("OpenCode died repeatedly")
+                shutdown(userInitiated = false)
+                break
+            }
+            OpenCodeStatus.set(OpenCodeStatus.Value.Starting)
+            updateNotification("Restarting OpenCode…")
+            delay(3000)
+        }
+    }
+
+    /**
+     * One supervised run. Returns the exit code, or null for fatal errors
+     * (status already set to Failed — supervisor must not retry).
+     */
+    private suspend fun startOnce(): Int? {
+        if (!RuntimeBootstrap.isBootstrapDone(filesDir)) {
+            OpenCodeStatus.set(OpenCodeStatus.Value.Failed("Run Test bootstrap first (Setup tab)"))
+            return null
+        }
+        if (!GuestSetup.isDone(filesDir)) {
+            OpenCodeStatus.set(OpenCodeStatus.Value.Failed("Run Install Node + OpenCode first (Setup tab)"))
+            return null
+        }
+        val resolved = ProotSetup.resolve(this) { appendServiceLog(it) }.getOrElse {
+            OpenCodeStatus.set(OpenCodeStatus.Value.Failed("proot setup failed: ${it.message}"))
+            return null
+        }
+        val rootfs = RuntimeBootstrap.rootfsDir(filesDir)
+        val guestSh =
+            "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; " +
+                "export HOME=/root; mkdir -p /root; cd /root; " +
+                "exec opencode web --hostname $HOST --port $PORT"
+        val cmd = ProotRunner.buildCommand(
+            resolved.proot, rootfs,
+            guestCmd = listOf("/bin/sh", "-c", guestSh)
+        )
+        appendServiceLog("$ opencode web --hostname $HOST --port $PORT")
+        val pb = ProcessBuilder(cmd)
+        pb.environment().remove("LD_PRELOAD")
+        pb.environment().putAll(resolved.env)
+        val p = try {
+            pb.start()
+        } catch (e: Exception) {
+            OpenCodeStatus.set(OpenCodeStatus.Value.Failed("Could not start proot: ${e.message}"))
+            return null
+        }
+        proc = p
+
+        val foundUrl = AtomicReference<String?>(null)
+        val recent = ArrayDeque<String>()
+        fun pump(stream: java.io.InputStream, tag: String) {
+            try {
+                stream.bufferedReader().forEachLine { line ->
+                    synchronized(recent) {
+                        recent.addLast(line.take(300))
+                        while (recent.size > 60) recent.removeFirst()
+                    }
+                    appendServiceLog("[$tag] $line")
+                    if (tag == "out" && foundUrl.get() == null) {
+                        pickUrl(line)?.let { foundUrl.compareAndSet(null, it) }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        val tOut = Thread({ pump(p.inputStream, "out") }, "opencode-stdout").apply { isDaemon = true; start() }
+        val tErr = Thread({ pump(p.errorStream, "err") }, "opencode-stderr").apply { isDaemon = true; start() }
+
+        try {
+            // Wait for the URL (or death) — up to 45s, then assume the fixed URL if alive.
+            val deadline = SystemClock.elapsedRealtime() + 45_000
+            var url: String? = null
+            while (p.isAlive && !userStopped && scope.isActive) {
+                url = foundUrl.get()
+                if (url != null) break
+                if (SystemClock.elapsedRealtime() > deadline) break
+                delay(250)
+            }
+            if (!p.isAlive) {
+                val tail = synchronized(recent) { recent.takeLast(15).joinToString("\n") }
+                appendServiceLog("process died during startup:\n$tail")
+                tOut.join(2000); tErr.join(2000)
+                proc = null
+                try {
+                    return p.exitValue()
+                } catch (_: Exception) {
+                    return 1
+                }
+            }
+            if (userStopped || !scope.isActive) {
+                tOut.join(1000); tErr.join(1000)
+                return 0
+            }
+            val bound = url ?: "http://$HOST:$PORT"
+            if (url == null) appendServiceLog("no URL in output after 45s — assuming $bound")
+            OpenCodeStatus.set(OpenCodeStatus.Value.Running(bound))
+            updateNotification(bound)
+            appendServiceLog("running at $bound")
+            try {
+                p.waitFor()
+            } catch (_: Exception) {
+                return 0
+            }
+            tOut.join(2000); tErr.join(2000)
+            proc = null
+            return try {
+                p.exitValue()
+            } catch (_: Exception) {
+                0
+            }
+        } finally {
+            if (proc === p) proc = null
+        }
+    }
+
+    private fun serviceLogFile(): File = File(filesDir, "opencode-service.log")
+
+    private fun appendServiceLog(line: String) {
+        try {
+            serviceLogFile().appendText(line.take(500) + "\n")
+        } catch (_: Exception) {}
+    }
+
+    private fun rotateLogIfHuge() {
+        try {
+            val f = serviceLogFile()
+            if (f.exists() && f.length() > 512 * 1024) {
+                val lines = f.readLines().takeLast(300)
+                f.writeText(lines.joinToString("\n"))
+            }
+        } catch (_: Exception) {}
     }
 
     private fun ensureChannel() {
@@ -109,5 +302,12 @@ class OpenCodeForegroundService : Service() {
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stop)
             .setOngoing(true)
             .build()
+    }
+
+    private fun updateNotification(text: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIF_ID, buildNotification(text))
+        } catch (_: Exception) {}
     }
 }
