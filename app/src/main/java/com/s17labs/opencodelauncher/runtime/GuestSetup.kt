@@ -71,7 +71,11 @@ object GuestSetup {
                 "/bin/sh", "-c",
                 // proot inherits the app's minimal PATH (no /sbin), while apk
                 // lives at /sbin/apk — set the standard Alpine root PATH first.
-                "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; $sh"
+                // npm/node also need HOME pointing at a real guest dir
+                // (uv_os_homedir ENOENT otherwise — the inherited host HOME
+                // doesn't exist inside the rootfs).
+                "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; " +
+                    "export HOME=/root; mkdir -p /root /tmp; $sh"
             )
 
             val steps = listOf(
