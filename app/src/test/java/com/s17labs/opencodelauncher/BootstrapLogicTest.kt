@@ -55,8 +55,8 @@ class BootstrapLogicTest {
 
     @Test
     fun prootAssetDirsMatchAndroidAbis() {
-        assertEquals("arm64-v8a", ProotSetup.assetAbiDir(RuntimeBootstrap.Abi.ARM64))
-        assertEquals("x86_64", ProotSetup.assetAbiDir(RuntimeBootstrap.Abi.X86_64))
+        assertEquals("arm64-v8a", ProotSetup.libAbiDir(RuntimeBootstrap.Abi.ARM64))
+        assertEquals("x86_64", ProotSetup.libAbiDir(RuntimeBootstrap.Abi.X86_64))
     }
 
     @Test

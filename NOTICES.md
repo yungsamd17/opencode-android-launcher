@@ -26,9 +26,16 @@ origin header in-file and be listed here with exact commits.
 
 ## Bundled proot binaries (Phase 1)
 
-`app/src/main/assets/proot/` contains *binaries only* (not source) from the
+`app/src/main/jniLibs/` contains *binaries only* (not source) from the
 official Termux apt repo, SHA-256 verified at fetch time via
-`scripts/fetch-proot.sh`:
+`scripts/fetch-proot.sh` (re-run it to reproduce the payload from scratch).
+
+Why jniLibs: apps targeting SDK 29+ cannot exec binaries from writable
+app-data dirs (SELinux EACCES, error=13 — this crashed the first POC build).
+The native library dir is executable, so proot ships as "native libs" with
+`android:extractNativeLibs="true"` and runs from `nativeLibraryDir`. Loader
+paths reach proot via its `PROOT_LOADER`/`PROOT_LOADER_32` env vars (verified
+present in the binary via strings); tmp via `PROOT_TMP_DIR`.
 
 - proot 5.1.107.92 (PRoot GPLv2; Termux build, NDK r29, 16KB-page aligned)
   - aarch64: `pool/main/p/proot/proot_5.1.107.92_aarch64.deb`

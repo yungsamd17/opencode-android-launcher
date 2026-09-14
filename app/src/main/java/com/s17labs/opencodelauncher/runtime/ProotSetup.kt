@@ -1,87 +1,130 @@
 package com.s17labs.opencodelauncher.runtime
 
 import android.content.Context
-import android.content.res.AssetManager
 import java.io.File
+import java.util.zip.ZipFile
 
 /**
- * Installs the Termux-built proot binary + its runtime deps from APK assets
- * into app-private storage and makes them executable.
+ * Locates the Termux-built proot payload shipped in jniLibs and builds the
+ * environment needed to run it.
  *
- * Provenance: official Termux apt repo, SHA-256 verified at fetch time —
- * see scripts/fetch-proot.sh and NOTICES.md. Only the *binaries* are bundled
- * (not their code), as the build plan allows. Re-run the script to refresh.
+ * Why jniLibs and not assets/ + chmod: apps targeting SDK 29+ cannot exec
+ * binaries from writable app-data dirs (SELinux denies with EACCES,
+ * error=13). The native library dir IS executable, so proot ships as
+ * "native libs" and runs from applicationInfo.nativeLibraryDir. This needs
+ * android:extractNativeLibs="true" in the manifest.
  *
- * Layout under assets/proot/<android-abi>/ mirrors Termux's $PREFIX slice:
- *   bin/proot, libexec/proot/{loader,loader32}, lib/{libtalloc.so.2,libandroid-shmem.so}
- * The bin/../libexec relationship matters: proot locates its loader relative
- * to its own path. SONAMEs must stay exact (proot DT_NEEDED asks for
- * "libtalloc.so.2" and "libandroid-shmem.so" — assets can't hold symlinks, so
- * the real bytes are stored directly under those names).
+ * Layout in jniLibs/<abi>/ (see scripts/fetch-proot.sh for provenance):
+ *   libproot.so            — the proot binary (renamed; executed directly)
+ *   libproot_loader.so     — guest-side loader, via PROOT_LOADER env
+ *   libproot_loader32.so   — 32-bit guest loader, via PROOT_LOADER_32 env
+ *   libtalloc.so.2         — exact SONAME from proot's DT_NEEDED
+ *   libandroid-shmem.so    — exact SONAME from proot's DT_NEEDED
+ *
+ * If the installer ever skips a non-.so name (libtalloc.so.2), the dep is
+ * extracted from our own APK (ZipFile on sourceDir) into app-private storage
+ * as a fallback — the *linker* may load it from there (only direct execve of
+ * app-data files is blocked, not library mapping).
  */
 object ProotSetup {
     const val PROOT_VERSION = "5.1.107.92"
-    const val TALLOC_VERSION = "2.4.3"
-    const val SHMEM_VERSION = "0.7"
 
-    fun assetAbiDir(abi: RuntimeBootstrap.Abi): String = when (abi) {
+    const val BIN_NAME = "libproot.so"
+    const val LOADER_NAME = "libproot_loader.so"
+    const val LOADER32_NAME = "libproot_loader32.so"
+    const val TALLOC_NAME = "libtalloc.so.2"
+    const val SHMEM_NAME = "libandroid-shmem.so"
+
+    fun libAbiDir(abi: RuntimeBootstrap.Abi): String = when (abi) {
         RuntimeBootstrap.Abi.ARM64 -> "arm64-v8a"
         RuntimeBootstrap.Abi.X86_64 -> "x86_64"
     }
 
-    fun hostDir(filesDir: File): File = File(filesDir, "proot-env/host")
-    fun prootBin(filesDir: File): File = File(hostDir(filesDir), "bin/proot")
-    fun libDir(filesDir: File): File = File(hostDir(filesDir), "lib")
+    fun nativeLibDir(ctx: Context): File = File(ctx.applicationInfo.nativeLibraryDir)
+    fun filesLibDir(filesDir: File): File = File(filesDir, "proot-env/lib")
+    fun tmpDir(filesDir: File): File = File(filesDir, "proot-env/tmp").apply { mkdirs() }
 
-    private fun versionFile(filesDir: File): File = File(hostDir(filesDir), ".proot-version")
+    data class Resolved(
+        val proot: File,
+        val env: Map<String, String>,
+        val diagnostics: String
+    )
 
-    fun isInstalled(filesDir: File): Boolean {
+    /** Resolve binary + env, installing dep fallbacks as needed. Never throws. */
+    fun resolve(ctx: Context, onLog: (String) -> Unit = {}): Result<Resolved> {
         return try {
-            versionFile(filesDir).takeIf { it.exists() }?.readText()?.trim() == PROOT_VERSION &&
-                prootBin(filesDir).canExecute() &&
-                File(libDir(filesDir), "libtalloc.so.2").exists() &&
-                File(libDir(filesDir), "libandroid-shmem.so").exists()
-        } catch (_: Exception) {
-            false
-        }
-    }
+            val abi = RuntimeBootstrap.detectAbi().getOrElse { return Result.failure(it) }
+            val libDir = nativeLibDir(ctx)
+            val diag = StringBuilder("nativeLibDir=${libDir.absolutePath} [")
+            diag.append(
+                (libDir.list()?.sorted()?.joinToString(",") { "$it:${File(libDir, it).length()}" }
+                    ?: "<unlistable>")
+            )
+            diag.append("]")
+            onLog(diag.toString())
 
-    /** Copy + chmod; returns the proot binary on success. */
-    fun ensureInstalled(ctx: Context, onLog: (String) -> Unit = {}): Result<File> {
-        val abi = RuntimeBootstrap.detectAbi().getOrElse { return Result.failure(it) }
-        if (isInstalled(ctx.filesDir)) return Result.success(prootBin(ctx.filesDir))
-        return try {
-            val dest = hostDir(ctx.filesDir)
-            if (dest.exists()) dest.deleteRecursively()
-            copyTree(ctx.assets, "proot/${assetAbiDir(abi)}", dest)
-            listOf("bin/proot", "libexec/proot/loader", "libexec/proot/loader32").forEach {
-                File(dest, it).setExecutable(true)
+            val proot = File(libDir, BIN_NAME)
+            if (!proot.exists()) {
+                return Result.failure(
+                    IllegalStateException("proot binary missing from native libs (apk split issue?). $diag")
+                )
             }
-            versionFile(ctx.filesDir).writeText("$PROOT_VERSION\n")
-            val bin = prootBin(ctx.filesDir)
-            if (!bin.canExecute()) return Result.failure(IllegalStateException("proot binary not executable after install"))
-            onLog("proot $PROOT_VERSION installed (${assetAbiDir(abi)})")
-            Result.success(bin)
+            if (!proot.canExecute()) {
+                return Result.failure(
+                    IllegalStateException("proot binary not executable (extractNativeLibs issue?). $diag")
+                )
+            }
+
+            // Deps must be findable by the linker under their SONAMEs. Prefer
+            // the native dir; fall back to app-private copies extracted from
+            // our own APK if the installer skipped them.
+            val searchDirs = mutableListOf(libDir.absolutePath)
+            val fallbackDir = filesLibDir(ctx.filesDir)
+            for (dep in listOf(TALLOC_NAME, SHMEM_NAME)) {
+                if (!File(libDir, dep).exists()) {
+                    onLog("$dep missing from native libs — extracting fallback from APK…")
+                    val fb = extractApkEntry(ctx, "lib/${libAbiDir(abi)}/$dep", File(fallbackDir, dep))
+                    if (fb != null) {
+                        onLog("fallback $dep ready (${fb.length()}B)")
+                    } else {
+                        onLog("WARNING: $dep unavailable anywhere; proot may fail to start")
+                    }
+                }
+            }
+            if (fallbackDir.exists()) searchDirs += fallbackDir.absolutePath
+
+            val loader = File(libDir, LOADER_NAME).takeIf { it.exists() }
+                ?: return Result.failure(IllegalStateException("proot loader missing from native libs. $diag"))
+            val loader32 = File(libDir, LOADER32_NAME).takeIf { it.exists() }
+                ?: return Result.failure(IllegalStateException("proot loader32 missing from native libs. $diag"))
+
+            // proot's compiled-in tmp default (/data/data/com.termux/...) is not
+            // ours — point it at our private tmp.
+            val env = mapOf(
+                "LD_LIBRARY_PATH" to searchDirs.joinToString(":"),
+                "PROOT_LOADER" to loader.absolutePath,
+                "PROOT_LOADER_32" to loader32.absolutePath,
+                "PROOT_TMP_DIR" to tmpDir(ctx.filesDir).absolutePath
+            )
+            onLog("proot $PROOT_VERSION resolved (${libAbiDir(abi)})")
+            Result.success(Resolved(proot, env, diag.toString()))
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    /** Env for execing the bundled proot: its DT_NEEDED libs resolve via this path. */
-    fun execEnv(filesDir: File): Map<String, String> =
-        mapOf("LD_LIBRARY_PATH" to libDir(filesDir).absolutePath)
-
-    private fun copyTree(am: AssetManager, assetPath: String, dest: File) {
-        val entries = am.list(assetPath) ?: emptyArray()
-        if (entries.isEmpty()) {
-            // Leaf file.
-            dest.parentFile?.mkdirs()
-            am.open(assetPath).use { input ->
-                dest.outputStream().use { out -> input.copyTo(out) }
+    private fun extractApkEntry(ctx: Context, entryPath: String, dest: File): File? {
+        return try {
+            ZipFile(ctx.applicationInfo.sourceDir).use { zip ->
+                val entry = zip.getEntry(entryPath) ?: return null
+                dest.parentFile?.mkdirs()
+                zip.getInputStream(entry).use { input ->
+                    dest.outputStream().use { out -> input.copyTo(out) }
+                }
             }
-        } else {
-            dest.mkdirs()
-            for (e in entries) copyTree(am, "$assetPath/$e", File(dest, e))
+            dest.takeIf { it.exists() && it.length() > 0 }
+        } catch (_: Exception) {
+            null
         }
     }
 }

@@ -110,31 +110,49 @@ class MainActivity : ComponentActivity() {
             runOnUiThread { logText = snapshot }
         }
         io.launch {
-            runOnUiThread { bootstrapState = BootstrapState.InProgress("Starting bootstrap…") }
-            append("ABI: ${(Build.SUPPORTED_ABIS?.joinToString() ?: "?")}")
-            if (RuntimeBootstrap.isBootstrapDone(filesDir)) {
-                append("Marker present — rootfs already extracted, running proot smoke test…")
-            }
-            val final = RuntimeBootstrap.bootstrap(filesDir) { s ->
-                runOnUiThread { bootstrapState = s }
-                if (s is BootstrapState.InProgress) append(s.stepLabel)
-            }
-            runOnUiThread { bootstrapState = final }
-            when (final) {
-                is BootstrapState.Ready -> {
-                    append("Rootfs ready. Installing proot binary…")
-                    val smoke = RuntimeBootstrap.prootSmokeTest(this@MainActivity, onLog = { append(it) })
-                    if (smoke == null) {
-                        append("Rootfs missing — wipe and re-run setup.")
-                    } else {
-                        append("proot exit=${smoke.exitCode} stdout=${smoke.stdout.trim().take(300)} stderr=${smoke.stderr.trim().take(300)}")
-                        if (smoke.exitCode == 0 && smoke.stdout.contains("proot-ok")) {
-                            append("SMOKE TEST PASSED — Phase 1 milestone reached.")
+            try {
+                runOnUiThread { bootstrapState = BootstrapState.InProgress("Starting bootstrap…") }
+                append("ABI: ${(Build.SUPPORTED_ABIS?.joinToString() ?: "?")}")
+                append("nativeLibDir: ${this@MainActivity.applicationInfo.nativeLibraryDir}")
+                if (RuntimeBootstrap.isBootstrapDone(filesDir)) {
+                    append("Marker present — rootfs already extracted, running proot smoke test…")
+                }
+                val final = try {
+                    RuntimeBootstrap.bootstrap(filesDir) { s ->
+                        runOnUiThread { bootstrapState = s }
+                        if (s is BootstrapState.InProgress) append(s.stepLabel)
+                    }
+                } catch (e: Exception) {
+                    BootstrapState.Failed("Bootstrap crashed: ${e.message}", retryable = true)
+                }
+                runOnUiThread { bootstrapState = final }
+                when (final) {
+                    is BootstrapState.Ready -> {
+                        append("Rootfs ready. Resolving proot binary…")
+                        val smoke = RuntimeBootstrap.prootSmokeTest(this@MainActivity, onLog = { append(it) })
+                        if (smoke == null) {
+                            append("Rootfs missing — wipe and re-run setup.")
+                        } else {
+                            append("proot exit=${smoke.exitCode} stdout=${smoke.stdout.trim().take(300)} stderr=${smoke.stderr.trim().take(300)}")
+                            if (smoke.exitCode == 0 && smoke.stdout.contains("proot-ok")) {
+                                append("SMOKE TEST PASSED — Phase 1 milestone reached.")
+                            } else if (smoke.exitCode != 0) {
+                                runOnUiThread {
+                                    bootstrapState = BootstrapState.Failed(
+                                        "proot smoke test failed (exit ${smoke.exitCode}): ${(smoke.stderr.ifBlank { smoke.stdout }).take(300)}",
+                                        retryable = true
+                                    )
+                                }
+                            }
                         }
                     }
+                    is BootstrapState.Failed -> append("FAILED: ${final.message}")
+                    else -> {}
                 }
-                is BootstrapState.Failed -> append("FAILED: ${final.message}")
-                else -> {}
+            } catch (e: Exception) {
+                val msg = "Test run crashed (no system crash box expected): ${e.message}"
+                append(msg)
+                runOnUiThread { bootstrapState = BootstrapState.Failed(msg, retryable = true) }
             }
         }
     }

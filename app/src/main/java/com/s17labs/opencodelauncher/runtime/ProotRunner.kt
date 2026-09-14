@@ -8,33 +8,14 @@ import java.io.File
  * Phase 1 milestone: a bare `proot <rootfs> /bin/sh -c 'echo ok'`
  * succeeding on a real aarch64 device. No root, no emulator-only proof.
  *
- * The proot binary itself is NOT bundled from unknown provenance:
- * resolution order is explicit prootFile > app native lib dir > PATH lookup,
- * and failure surfaces a clear error naming where we looked.
+ * The proot binary ships in jniLibs and is resolved via [ProotSetup] —
+ * never from writable app-data dirs (exec there is denied on targetSdk 29+).
+ * [exec] never throws: spawn/wait failures become exit-code -1 results so the
+ * UI can show them instead of crashing.
  */
 object ProotRunner {
 
     data class Result(val exitCode: Int, val stdout: String, val stderr: String)
-
-    fun resolveProot(explicit: File? = null, nativeLibDir: File? = null): File? {
-        if (explicit != null && explicit.canExecute()) return explicit
-        if (nativeLibDir != null) {
-            val cand = File(nativeLibDir, "libproot.so")
-            if (cand.exists() && cand.canExecute()) return cand
-            val cand2 = File(nativeLibDir, "proot")
-            if (cand2.exists() && cand2.canExecute()) return cand2
-        }
-        // PATH lookup via shell — keep shell use minimal and explicit.
-        return try {
-            val p = ProcessBuilder("sh", "-c", "command -v proot")
-                .redirectErrorStream(true).start()
-            val out = p.inputStream.bufferedReader().readText().trim()
-            p.waitFor()
-            if (out.isNotBlank()) File(out.substringAfterLast('\n').trim()).takeIf { it.exists() } else null
-        } catch (_: Exception) {
-            null
-        }
-    }
 
     fun buildCommand(
         prootBin: File,
@@ -65,13 +46,16 @@ object ProotRunner {
         timeoutSec: Long = 30,
         extraEnv: Map<String, String> = emptyMap()
     ): Result {
-        val pb = ProcessBuilder(cmd).redirectErrorStream(false)
-        if (workDir != null) pb.directory(workDir)
-        // Minimal sanitized env: don't leak host LD_* into guest, except the
-        // caller-provided library path for our bundled proot deps.
-        pb.environment().remove("LD_PRELOAD")
-        pb.environment().putAll(extraEnv)
-        val proc = pb.start()
+        // Never throw: callers run on a bare coroutine with no handler, and a
+        // spawn failure (e.g. EACCES) must land in the UI, not in a crash box.
+        try {
+            val pb = ProcessBuilder(cmd).redirectErrorStream(false)
+            if (workDir != null) pb.directory(workDir)
+            // Minimal sanitized env: don't leak host LD_* into guest, except the
+            // caller-provided library path for our bundled proot deps.
+            pb.environment().remove("LD_PRELOAD")
+            pb.environment().putAll(extraEnv)
+            val proc = pb.start()
         val stdout = StringBuilder()
         val stderr = StringBuilder()
         val tOut = Thread { try { proc.inputStream.bufferedReader().forEachLine { stdout.appendLine(it) } } catch (_: Exception) {} }
@@ -85,5 +69,8 @@ object ProotRunner {
         }
         tOut.join(5000); tErr.join(5000)
         return Result(proc.exitValue(), stdout.toString(), stderr.toString())
+        } catch (e: Exception) {
+            return Result(-1, "", "exec failed: ${e.message}")
+        }
     }
 }
