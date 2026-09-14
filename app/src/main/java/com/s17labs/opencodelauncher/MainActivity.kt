@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
                             logText = logText,
                             onTestBootstrap = { runBootstrapPoc() },
                             onRetry = { runBootstrapPoc() },
+                            onShareLog = { shareLog() },
                             onContinue = { nav.navigate(Routes.HOME) }
                         )
                     }
@@ -82,6 +83,7 @@ class MainActivity : ComponentActivity() {
                         SettingsScreen(
                             logText = logText,
                             onWipeRootfs = { wipeRootfs() },
+                            onShareLog = { shareLog() },
                             onBack = { nav.popBackStack() }
                         )
                     }
@@ -101,7 +103,10 @@ class MainActivity : ComponentActivity() {
         val log = StringBuilder()
         fun append(msg: String) {
             log.appendLine(msg)
-            val snapshot = log.toString().takeLast(4000)
+            try {
+                java.io.File(filesDir, "bootstrap.log").appendText(msg + "\n")
+            } catch (_: Exception) {}
+            val snapshot = log.toString().takeLast(6000)
             runOnUiThread { logText = snapshot }
         }
         io.launch {
@@ -157,6 +162,17 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
             startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
         }
+    }
+
+    private fun shareLog() {
+        try {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "OpenCode Launcher bootstrap log")
+                putExtra(Intent.EXTRA_TEXT, logText.ifBlank { "No logs yet." })
+            }
+            startActivity(Intent.createChooser(send, "Share bootstrap log"))
+        } catch (_: Exception) {}
     }
 
     private fun wipeRootfs() {

@@ -98,17 +98,27 @@ object RuntimeBootstrap {
         val rootfs = rootfsDir(filesDir)
         val staging = stagingDir(filesDir)
 
-        // 1. Download (resume of partial .tmp like proot-distro's tmp-rename pattern).
+        // 1. Download (tmp-rename pattern like proot-distro). Skip if a
+        // verified tarball is already on disk (retry after extract failure
+        // must not re-download a good file on a slow connection).
         var attempt = 0
-        var downloaded = false
+        var downloaded = tarball.exists() && tarball.length() > 1_000_000
+        if (downloaded) onState(BootstrapState.InProgress("Reusing downloaded tarball (${tarball.length() / 1024 / 1024}MB)…"))
         var lastErr = ""
+        var lastPct = -1
         while (attempt < MAX_DOWNLOAD_ATTEMPTS && !downloaded) {
             attempt++
             onState(BootstrapState.InProgress("Downloading Alpine $attempt/$MAX_DOWNLOAD_ATTEMPTS…"))
             try {
                 downloadUrl(AlpineCatalog.tarballUrl(abi), tarball) { done, total ->
-                    val p = if (total > 0) done.toFloat() / total else null
-                    onState(BootstrapState.InProgress("Downloading Alpine… ${(p?.times(100))?.toInt() ?: 0}%", p))
+                    val pct = if (total > 0) ((done * 100) / total).toInt() else -1
+                    // Throttle: only emit on integer-percent change, or the log
+                    // floods (one emit per 32KB chunk) and buries later steps.
+                    if (pct != lastPct) {
+                        lastPct = pct
+                        val p = if (total > 0) done.toFloat() / total else null
+                        onState(BootstrapState.InProgress("Downloading Alpine… $pct%", p))
+                    }
                 }
                 downloaded = true
             } catch (e: Exception) {
@@ -139,17 +149,30 @@ object RuntimeBootstrap {
         }
 
         // 3. Extract to staging (wipe stale staging first, like TermuxInstaller).
-        onState(BootstrapState.InProgress("Extracting rootfs…"))
+        // NOTE: toybox tar on-device differs from GNU tar — keep flags minimal
+        // (-xzf only; -p tries to restore ownership and misbehaves here).
+        onState(BootstrapState.InProgress("Extracting rootfs (${tarball.length() / 1024 / 1024}MB)…"))
         try {
             if (staging.exists()) staging.deleteRecursively()
             staging.mkdirs()
+            val tarVer = try {
+                ProotRunner.exec(listOf("tar", "--version"), timeoutSec = 10).let {
+                    (it.stdout.ifBlank { it.stderr }).trim().take(120).replace("\n", " ")
+                }
+            } catch (_: Exception) { "unknown" }
             val res = ProotRunner.exec(
-                listOf("tar", "-xzpf", tarball.absolutePath, "-C", staging.absolutePath),
+                listOf("tar", "-xzf", tarball.absolutePath, "-C", staging.absolutePath),
                 timeoutSec = 300
             )
-            if (res.exitCode != 0 || !File(staging, "bin/sh").exists()) {
+            val entries = try {
+                staging.list()?.sorted()?.take(25)?.joinToString(",") ?: "<empty>"
+            } catch (_: Exception) { "<unlistable>" }
+            val shOk = File(staging, "bin/sh").exists() || File(staging, "bin/busybox").exists()
+            if (res.exitCode != 0 || !shOk) {
                 val f = BootstrapState.Failed(
-                    "Extraction failed (exit ${res.exitCode}): ${(res.stderr.ifBlank { res.stdout }).take(500)}",
+                    "Extraction failed: tar=$tarVer exit=${res.exitCode} " +
+                        "tarball=${tarball.length()}B top=[$entries] " +
+                        "err=${res.stderr.take(300)} out=${res.stdout.take(300)}",
                     retryable = true
                 )
                 onState(f); return@withContext f

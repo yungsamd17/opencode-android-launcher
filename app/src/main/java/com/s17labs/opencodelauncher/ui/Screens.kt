@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,10 +28,11 @@ fun SetupScreen(
     logText: String,
     onTestBootstrap: () -> Unit,
     onRetry: () -> Unit,
+    onShareLog: () -> Unit,
     onContinue: () -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Setup", style = MaterialTheme.typography.headlineMedium)
@@ -59,7 +63,14 @@ fun SetupScreen(
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Raw log", style = MaterialTheme.typography.titleMedium)
-                Text(logText.ifBlank { "Logs appear here during bootstrap." }, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    logText.ifBlank { "Logs appear here during bootstrap." },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                )
+                OutlinedButton(onClick = onShareLog, modifier = Modifier.fillMaxWidth()) {
+                    Text("Share log")
+                }
             }
         }
         Spacer(modifier = Modifier.height(4.dp))
@@ -116,17 +127,25 @@ fun HomeScreen(
 fun SettingsScreen(
     logText: String,
     onWipeRootfs: () -> Unit,
+    onShareLog: () -> Unit,
     onBack: () -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Logs", style = MaterialTheme.typography.titleMedium)
-                Text(logText, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    logText.ifBlank { "No logs yet." },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())
+                )
+                OutlinedButton(onClick = onShareLog, modifier = Modifier.fillMaxWidth()) {
+                    Text("Share log")
+                }
             }
         }
         OutlinedButton(onClick = onWipeRootfs, modifier = Modifier.fillMaxWidth()) {
