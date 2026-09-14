@@ -80,4 +80,19 @@ class BootstrapLogicTest {
         assertNull(GuestSetup.parseVersionLine("not a version"))
         assertNull(GuestSetup.parseVersionLine(""))
     }
+
+    @Test
+    fun guestShellAnchorsOnBusyboxFile() {
+        // Regression: Alpine's bin/sh is an ABSOLUTE symlink (sh -> /bin/busybox),
+        // which never host-resolves. A rootfs with marker + busybox but a
+        // dangling bin/sh must count as bootstrapped.
+        val dir = createTempDir("rootfs")
+        try {
+            val bin = java.io.File(dir, "bin").apply { mkdirs() }
+            java.io.File(bin, "busybox").writeText("fake")
+            assertTrue(RuntimeBootstrap.hasGuestShell(dir))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

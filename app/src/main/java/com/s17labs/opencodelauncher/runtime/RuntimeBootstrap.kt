@@ -58,8 +58,28 @@ object RuntimeBootstrap {
     fun markerFile(filesDir: File): File = File(envDir(filesDir), ".bootstrap-done")
 
     fun isBootstrapDone(filesDir: File): Boolean {
-        return markerFile(filesDir).exists() &&
-            File(rootfsDir(filesDir), "bin/sh").exists()
+        return markerFile(filesDir).exists() && hasGuestShell(rootfsDir(filesDir))
+    }
+
+    /**
+     * True when the guest shell is usable. NOTE: Alpine ships bin/sh as an
+     * ABSOLUTE symlink (sh -> /bin/busybox, verified in the 3.23.3 tarball),
+     * so host-side File("bin/sh").exists() is ALWAYS false (it resolves to
+     * the host's /bin/busybox, which doesn't exist on Android) even though
+     * /bin/sh works fine inside the proot guest. Anchor on the real file
+     * bin/busybox instead — never on the bare bin/sh symlink.
+     */
+    fun hasGuestShell(rootfs: File): Boolean {
+        return File(rootfs, "bin/busybox").exists() || File(rootfs, "bin/sh").exists()
+    }
+
+    /** One-line diagnosis of what's missing (for failure messages, not just booleans). */
+    fun diagnoseRootfs(filesDir: File): String {
+        val rootfs = rootfsDir(filesDir)
+        return "marker=${markerFile(filesDir).exists()} " +
+            "bin/busybox=${File(rootfs, "bin/busybox").exists()} " +
+            "bin/sh=${File(rootfs, "bin/sh").exists()} " +
+            "top=[${try { rootfs.list()?.sorted()?.take(10)?.joinToString(",") } catch (_: Exception) { "?" }}]"
     }
 
     /**
@@ -167,7 +187,7 @@ object RuntimeBootstrap {
             val entries = try {
                 staging.list()?.sorted()?.take(25)?.joinToString(",") ?: "<empty>"
             } catch (_: Exception) { "<unlistable>" }
-            val shOk = File(staging, "bin/sh").exists() || File(staging, "bin/busybox").exists()
+            val shOk = hasGuestShell(staging)
             if (res.exitCode != 0 || !shOk) {
                 val f = BootstrapState.Failed(
                     "Extraction failed: tar=$tarVer exit=${res.exitCode} " +
@@ -217,7 +237,7 @@ object RuntimeBootstrap {
     ): ProotRunner.Result? = withContext(Dispatchers.IO) {
         try {
             val rootfs = rootfsDir(ctx.filesDir)
-            if (!File(rootfs, "bin/sh").exists() && !File(rootfs, "bin/busybox").exists()) {
+            if (!hasGuestShell(rootfs)) {
                 return@withContext null
             }
             val resolved = ProotSetup.resolve(ctx, onLog).getOrElse {

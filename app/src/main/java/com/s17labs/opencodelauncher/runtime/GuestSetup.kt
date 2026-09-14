@@ -46,7 +46,10 @@ object GuestSetup {
     ): BootstrapState = withContext(Dispatchers.IO) {
         try {
             if (!RuntimeBootstrap.isBootstrapDone(ctx.filesDir)) {
-                val f = BootstrapState.Failed("Rootfs not ready — run bootstrap first.", retryable = true)
+                val f = BootstrapState.Failed(
+                    "Rootfs not ready — run bootstrap first. (${RuntimeBootstrap.diagnoseRootfs(ctx.filesDir)})",
+                    retryable = true
+                )
                 onState(f); return@withContext f
             }
             val resolved = ProotSetup.resolve(ctx, onLog).getOrElse {
