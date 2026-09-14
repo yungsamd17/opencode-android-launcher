@@ -1,6 +1,8 @@
 package com.s17labs.opencodelauncher
 
 import com.s17labs.opencodelauncher.runtime.AlpineCatalog
+import com.s17labs.opencodelauncher.runtime.ProotRunner
+import com.s17labs.opencodelauncher.runtime.ProotSetup
 import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
 import com.s17labs.opencodelauncher.runtime.Sha256
 import org.junit.Assert.assertEquals
@@ -49,5 +51,23 @@ class BootstrapLogicTest {
         )
         assertEquals("b".repeat(64), Sha256.parseSidecar("B".repeat(64) + "\n"))
         assertNull(Sha256.parseSidecar("not-a-hash"))
+    }
+
+    @Test
+    fun prootAssetDirsMatchAndroidAbis() {
+        assertEquals("arm64-v8a", ProotSetup.assetAbiDir(RuntimeBootstrap.Abi.ARM64))
+        assertEquals("x86_64", ProotSetup.assetAbiDir(RuntimeBootstrap.Abi.X86_64))
+    }
+
+    @Test
+    fun prootCommandBindsSystemDirs() {
+        val cmd = ProotRunner.buildCommand(
+            java.io.File("/x/bin/proot"),
+            java.io.File("/x/rootfs")
+        )
+        assertTrue(cmd.contains("--rootfs=/x/rootfs"))
+        assertTrue(cmd.contains("--bind=/proc"))
+        assertTrue(cmd.contains("--bind=/dev"))
+        assertTrue(cmd.takeLast(3) == listOf("/bin/sh", "-c", "echo proot-ok"))
     }
 }

@@ -205,16 +205,27 @@ object RuntimeBootstrap {
         BootstrapState.Ready
     }
 
-    /** Bare proot smoke test: `proot <rootfs> /bin/sh -c 'echo proot-ok'`. */
+    /**
+     * Bare proot smoke test: installs the bundled proot if needed, then runs
+     * `proot <rootfs> /bin/sh -c 'echo proot-ok'`. Returns null only when the
+     * rootfs itself is missing; setup failures are returned as exit -1 results
+     * so the UI can show the reason. [onLog] receives setup progress lines.
+     */
     suspend fun prootSmokeTest(
-        filesDir: File,
-        prootBin: File? = null,
-        nativeLibDir: File? = null
+        ctx: android.content.Context,
+        onLog: (String) -> Unit = {}
     ): ProotRunner.Result? = withContext(Dispatchers.IO) {
-        val rootfs = rootfsDir(filesDir)
-        if (!File(rootfs, "bin/sh").exists()) return@withContext null
-        val bin = ProotRunner.resolveProot(prootBin, nativeLibDir) ?: return@withContext null
-        ProotRunner.exec(ProotRunner.buildCommand(bin, rootfs))
+        val rootfs = rootfsDir(ctx.filesDir)
+        if (!File(rootfs, "bin/sh").exists() && !File(rootfs, "bin/busybox").exists()) {
+            return@withContext null
+        }
+        val bin = ProotSetup.ensureInstalled(ctx, onLog).getOrElse {
+            return@withContext ProotRunner.Result(-1, "", "proot install failed: ${it.message}")
+        }
+        ProotRunner.exec(
+            ProotRunner.buildCommand(bin, rootfs),
+            extraEnv = ProotSetup.execEnv(ctx.filesDir)
+        )
     }
 
     internal fun downloadUrl(url: String, dest: File, onProgress: (done: Long, total: Long) -> Unit = { _, _ -> }) {

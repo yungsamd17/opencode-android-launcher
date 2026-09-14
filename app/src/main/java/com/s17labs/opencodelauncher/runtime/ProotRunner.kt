@@ -59,11 +59,18 @@ object ProotRunner {
         return cmd
     }
 
-    fun exec(cmd: List<String>, workDir: File? = null, timeoutSec: Long = 30): Result {
+    fun exec(
+        cmd: List<String>,
+        workDir: File? = null,
+        timeoutSec: Long = 30,
+        extraEnv: Map<String, String> = emptyMap()
+    ): Result {
         val pb = ProcessBuilder(cmd).redirectErrorStream(false)
         if (workDir != null) pb.directory(workDir)
-        // Minimal sanitized env: don't leak host LD_* into guest.
+        // Minimal sanitized env: don't leak host LD_* into guest, except the
+        // caller-provided library path for our bundled proot deps.
         pb.environment().remove("LD_PRELOAD")
+        pb.environment().putAll(extraEnv)
         val proc = pb.start()
         val stdout = StringBuilder()
         val stderr = StringBuilder()

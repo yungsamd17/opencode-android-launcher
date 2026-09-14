@@ -122,18 +122,15 @@ class MainActivity : ComponentActivity() {
             runOnUiThread { bootstrapState = final }
             when (final) {
                 is BootstrapState.Ready -> {
-                    append("Rootfs ready. Looking for proot binary…")
-                    val smoke = RuntimeBootstrap.prootSmokeTest(filesDir, nativeLibDir = applicationInfo.nativeLibraryDir?.let { java.io.File(it) })
+                    append("Rootfs ready. Installing proot binary…")
+                    val smoke = RuntimeBootstrap.prootSmokeTest(this@MainActivity, onLog = { append(it) })
                     if (smoke == null) {
-                        append("No proot binary found yet (expected — Phase 1 still needs the Termux-built proot binary). Rootfs extract OK.")
-                        runOnUiThread {
-                            bootstrapState = BootstrapState.Failed(
-                                "Rootfs extracted, but no proot binary yet — next: bundle a Termux-built proot and re-run smoke test.",
-                                retryable = true
-                            )
-                        }
+                        append("Rootfs missing — wipe and re-run setup.")
                     } else {
                         append("proot exit=${smoke.exitCode} stdout=${smoke.stdout.trim().take(300)} stderr=${smoke.stderr.trim().take(300)}")
+                        if (smoke.exitCode == 0 && smoke.stdout.contains("proot-ok")) {
+                            append("SMOKE TEST PASSED — Phase 1 milestone reached.")
+                        }
                     }
                 }
                 is BootstrapState.Failed -> append("FAILED: ${final.message}")
