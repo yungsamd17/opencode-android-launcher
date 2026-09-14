@@ -16,8 +16,21 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        // Shared debug key (committed on purpose): CI and local builds share one
+        // signature so debug APKs install as updates. Same pattern as RevNotify.
+        // NOT for release — standard android/androiddebugkey credentials.
+        create("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         debug {
+            signingConfig = signingConfigs.getByName("debug")
             isDebuggable = true
             isMinifyEnabled = false
             resValue("string", "app_name", "OpenCode Launcher Debug")
