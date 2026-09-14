@@ -79,7 +79,7 @@ object GuestSetup {
                     extraEnv = resolved.env,
                     timeoutSec = s.timeoutSec
                 )
-                r.stdout.lineSequence().filter { it.isNotBlank() }.takeLast(15).forEach { onLog("  $it") }
+                r.stdout.lineSequence().filter { it.isNotBlank() }.toList().takeLast(15).forEach { onLog("  $it") }
                 if (r.exitCode != 0) {
                     val tail = r.stderr.ifBlank { r.stdout }.trim().lines().takeLast(8).joinToString("\n").take(600)
                     val f = BootstrapState.Failed("${s.label} failed (exit ${r.exitCode}):\n$tail", retryable = true)
