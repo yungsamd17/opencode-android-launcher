@@ -36,7 +36,10 @@ object ProotRunner {
             cmd += "--bind=$host:$guest"
         }
         // Isolate env inside guest; keep it minimal for the POC.
-        cmd += listOf("--cwd=/", "--", *guestCmd.toTypedArray())
+        // NOTE: no "--" separator — this proot build rejects it
+        // ("unknown option '--'"); parsing stops at the first non-option
+        // (the guest program), so the rest passes through untouched.
+        cmd += listOf("--cwd=/") + guestCmd
         return cmd
     }
 

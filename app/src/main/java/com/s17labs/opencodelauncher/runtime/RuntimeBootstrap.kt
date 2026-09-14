@@ -105,16 +105,16 @@ object RuntimeBootstrap {
         var downloaded = tarball.exists() && tarball.length() > 1_000_000
         if (downloaded) onState(BootstrapState.InProgress("Reusing downloaded tarball (${tarball.length() / 1024 / 1024}MB)…"))
         var lastErr = ""
-        var lastPct = -1
+        var lastPct = -10
         while (attempt < MAX_DOWNLOAD_ATTEMPTS && !downloaded) {
             attempt++
             onState(BootstrapState.InProgress("Downloading Alpine $attempt/$MAX_DOWNLOAD_ATTEMPTS…"))
             try {
                 downloadUrl(AlpineCatalog.tarballUrl(abi), tarball) { done, total ->
                     val pct = if (total > 0) ((done * 100) / total).toInt() else -1
-                    // Throttle: only emit on integer-percent change, or the log
-                    // floods (one emit per 32KB chunk) and buries later steps.
-                    if (pct != lastPct) {
+                    // Throttle: emit per 10% step, or the log floods and buries
+                    // later steps.
+                    if (pct / 10 != lastPct / 10 || pct == 100) {
                         lastPct = pct
                         val p = if (total > 0) done.toFloat() / total else null
                         onState(BootstrapState.InProgress("Downloading Alpine… $pct%", p))
