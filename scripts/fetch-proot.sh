@@ -14,14 +14,18 @@
 # Naming: proot + its loaders are renamed to *.so (installer-extracted with
 # exec permission); proot is told the loader paths via PROOT_LOADER[_32] env.
 # libtalloc keeps its exact SONAME (libtalloc.so.2) — proot DT_NEEDED asks for
-# it by that name. If the installer ever skips non-.so names, the app falls
-# back to extracting them from its own APK (ZipFile on sourceDir).
+# it by that name. AGP does NOT package non-.so jniLibs names into the APK, so
+# a second copy ships in assets/ as the linker's fallback (only direct execve
+# of app-data files is blocked — library mapping from there is allowed).
 #
-# Usage: sh scripts/fetch-proot.sh [jniLibs-dir]
+# Usage: run from the repo root:
+#   sh scripts/fetch-proot.sh [jniLibs-dir] [assets-lib-dir]
 # Output: <jniLibs-dir>/<arm64-v8a|x86_64>/{libproot.so,libproot_loader.so,
 #   libproot_loader32.so,libtalloc.so.2,libandroid-shmem.so}
+#   <assets-lib-dir>/<arm64-v8a|x86_64>/libtalloc.so.2
 set -eu
 OUT="${1:-app/src/main/jniLibs}"
+ASSETS_OUT="${2:-app/src/main/assets/proot-libs}"
 REPO="https://packages.termux.dev/apt/termux-main"
 mkdir -p "$OUT"
 
@@ -104,6 +108,9 @@ for ARCH in aarch64 x86_64; do
   # and the linker needs the real bytes under the exact SONAME.
   cp -L "$U/lib/libtalloc.so.2" "$DEST/libtalloc.so.2"
   cp "$U/lib/libandroid-shmem.so" "$DEST/libandroid-shmem.so"
+  # Fallback copy for the linker (see header): AGP drops non-.so names.
+  mkdir -p "$ASSETS_OUT/$ABI"
+  cp -L "$U/lib/libtalloc.so.2" "$ASSETS_OUT/$ABI/libtalloc.so.2"
   echo "--- $ABI:"
   ls -la "$DEST"
 done

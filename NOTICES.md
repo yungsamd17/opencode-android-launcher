@@ -48,7 +48,10 @@ present in the binary via strings); tmp via `PROOT_TMP_DIR`.
 
 Upstream: https://github.com/termux/termux-packages (proot package),
 PRoot itself: https://github.com/proot-me/proot.
-Re-run `sh scripts/fetch-proot.sh` to reproduce the assets from scratch.
+Re-run `sh scripts/fetch-proot.sh` from the repo root to reproduce the
+payload from scratch. Note: AGP does not package the non-.so name
+`libtalloc.so.2` into the APK, so `assets/proot-libs/` carries a second copy
+of it as the linker's fallback (loaded, never directly executed).
 
 Original code in this project (Compose UI, service, Kotlin glue not derived from
 Termux) is part of the combined GPLv3-covered app on distribution.

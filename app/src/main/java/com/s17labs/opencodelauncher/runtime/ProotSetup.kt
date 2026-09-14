@@ -2,7 +2,6 @@ package com.s17labs.opencodelauncher.runtime
 
 import android.content.Context
 import java.io.File
-import java.util.zip.ZipFile
 
 /**
  * Locates the Termux-built proot payload shipped in jniLibs and builds the
@@ -21,10 +20,10 @@ import java.util.zip.ZipFile
  *   libtalloc.so.2         — exact SONAME from proot's DT_NEEDED
  *   libandroid-shmem.so    — exact SONAME from proot's DT_NEEDED
  *
- * If the installer ever skips a non-.so name (libtalloc.so.2), the dep is
- * extracted from our own APK (ZipFile on sourceDir) into app-private storage
- * as a fallback — the *linker* may load it from there (only direct execve of
- * app-data files is blocked, not library mapping).
+ * If the installer skips the non-.so name (libtalloc.so.2 — AGP does not
+ * package it), the dep is copied from assets/proot-libs/ into app-private
+ * storage as a fallback — the *linker* may load it from there (only direct
+ * execve of app-data files is blocked, not library mapping).
  */
 object ProotSetup {
     const val PROOT_VERSION = "5.1.107.92"
@@ -76,14 +75,14 @@ object ProotSetup {
             }
 
             // Deps must be findable by the linker under their SONAMEs. Prefer
-            // the native dir; fall back to app-private copies extracted from
-            // our own APK if the installer skipped them.
+            // the native dir; fall back to app-private copies from assets
+            // if the installer skipped them.
             val searchDirs = mutableListOf(libDir.absolutePath)
             val fallbackDir = filesLibDir(ctx.filesDir)
             for (dep in listOf(TALLOC_NAME, SHMEM_NAME)) {
                 if (!File(libDir, dep).exists()) {
-                    onLog("$dep missing from native libs — extracting fallback from APK…")
-                    val fb = extractApkEntry(ctx, "lib/${libAbiDir(abi)}/$dep", File(fallbackDir, dep))
+                    onLog("$dep missing from native libs — copying fallback from assets…")
+                    val fb = copyAssetDep(ctx, "proot-libs/${libAbiDir(abi)}/$dep", File(fallbackDir, dep))
                     if (fb != null) {
                         onLog("fallback $dep ready (${fb.length()}B)")
                     } else {
@@ -113,14 +112,11 @@ object ProotSetup {
         }
     }
 
-    private fun extractApkEntry(ctx: Context, entryPath: String, dest: File): File? {
+    private fun copyAssetDep(ctx: Context, assetPath: String, dest: File): File? {
         return try {
-            ZipFile(ctx.applicationInfo.sourceDir).use { zip ->
-                val entry = zip.getEntry(entryPath) ?: return null
-                dest.parentFile?.mkdirs()
-                zip.getInputStream(entry).use { input ->
-                    dest.outputStream().use { out -> input.copyTo(out) }
-                }
+            dest.parentFile?.mkdirs()
+            ctx.assets.open(assetPath).use { input ->
+                dest.outputStream().use { out -> input.copyTo(out) }
             }
             dest.takeIf { it.exists() && it.length() > 0 }
         } catch (_: Exception) {
