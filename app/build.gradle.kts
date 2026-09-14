@@ -20,7 +20,8 @@ android {
         // Shared debug key (committed on purpose): CI and local builds share one
         // signature so debug APKs install as updates. Same pattern as RevNotify.
         // NOT for release — standard android/androiddebugkey credentials.
-        create("debug") {
+        // NOTE: AGP pre-creates a "debug" config, so configure it via getByName.
+        getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
