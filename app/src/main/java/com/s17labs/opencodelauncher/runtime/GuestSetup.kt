@@ -67,7 +67,12 @@ object GuestSetup {
                 }
             } catch (_: Exception) {}
 
-            fun guest(sh: String) = listOf("/bin/sh", "-c", sh)
+            fun guest(sh: String) = listOf(
+                "/bin/sh", "-c",
+                // proot inherits the app's minimal PATH (no /sbin), while apk
+                // lives at /sbin/apk — set the standard Alpine root PATH first.
+                "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; $sh"
+            )
 
             val steps = listOf(
                 Step("Updating apk index…", guest("apk update"), 180),
