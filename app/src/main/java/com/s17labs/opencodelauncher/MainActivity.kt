@@ -14,6 +14,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.s17labs.opencodelauncher.runtime.BootstrapState
+import com.s17labs.opencodelauncher.runtime.GuestSetup
 import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
 import com.s17labs.opencodelauncher.service.OpenCodeForegroundService
 import com.s17labs.opencodelauncher.ui.HomeScreen
@@ -35,7 +36,8 @@ class MainActivity : ComponentActivity() {
     private var bootstrapState: BootstrapState by mutableStateOf(BootstrapState.NotStarted)
     private var boundUrl: String? by mutableStateOf(null)
     private var status: String by mutableStateOf("Stopped")
-    private var logText: String by mutableStateOf("Phase 0 skeleton. Phase 1 adds real bootstrap logs here.")
+    private var guestStatus: String by mutableStateOf("Packages: not installed")
+    private var logText: String by mutableStateOf("Phase 1 done (proot-ok on-device). Phase 2 installs guest packages here.")
     private val io = CoroutineScope(Dispatchers.IO)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,7 +64,9 @@ class MainActivity : ComponentActivity() {
                             abiLabel = abiLabel,
                             state = bootstrapState,
                             logText = logText,
+                            guestStatus = guestStatus,
                             onTestBootstrap = { runBootstrapPoc() },
+                            onInstallPackages = { runGuestSetup() },
                             onRetry = { runBootstrapPoc() },
                             onShareLog = { shareLog() },
                             onContinue = { nav.navigate(Routes.HOME) }
@@ -155,6 +159,55 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread { bootstrapState = BootstrapState.Failed(msg, retryable = true) }
             }
         }
+    }
+
+    private fun runGuestSetup() {
+        io.launch {
+            try {
+                if (!RuntimeBootstrap.isBootstrapDone(filesDir)) {
+                    appendLog("Rootfs missing - running bootstrap first…")
+                    runOnUiThread { bootstrapState = BootstrapState.InProgress("Bootstrapping rootfs first…") }
+                    val b = try {
+                        RuntimeBootstrap.bootstrap(filesDir) { s ->
+                            runOnUiThread { bootstrapState = s }
+                            if (s is BootstrapState.InProgress) appendLog(s.stepLabel)
+                        }
+                    } catch (e: Exception) {
+                        BootstrapState.Failed("Bootstrap crashed: ${e.message}", retryable = true)
+                    }
+                    runOnUiThread { bootstrapState = b }
+                    if (b !is BootstrapState.Ready) {
+                        appendLog("FAILED: bootstrap did not complete - fix that first.")
+                        return@launch
+                    }
+                }
+                val final = GuestSetup.install(
+                    this@MainActivity,
+                    onState = { runOnUiThread { bootstrapState = it } },
+                    onLog = { appendLog(it) }
+                )
+                if (final is BootstrapState.Ready) {
+                    val summary = try {
+                        java.io.File(filesDir, "proot-env/.guest-setup-done").readText().trim()
+                    } catch (_: Exception) { "done" }
+                    runOnUiThread { guestStatus = "Packages: $summary" }
+                    appendLog("PHASE 2 DONE - $summary")
+                } else if (final is BootstrapState.Failed) {
+                    appendLog("FAILED: ${final.message}")
+                }
+            } catch (e: Exception) {
+                val msg = "Package install crashed: ${e.message}"
+                appendLog(msg)
+                runOnUiThread { bootstrapState = BootstrapState.Failed(msg, retryable = true) }
+            }
+        }
+    }
+
+    private fun appendLog(msg: String) {
+        try {
+            java.io.File(filesDir, "bootstrap.log").appendText(msg + "\n")
+        } catch (_: Exception) {}
+        runOnUiThread { logText = (logText + "\n" + msg).takeLast(6000) }
     }
 
     private fun startOpencodeService() {

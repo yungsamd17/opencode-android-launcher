@@ -1,6 +1,7 @@
 package com.s17labs.opencodelauncher
 
 import com.s17labs.opencodelauncher.runtime.AlpineCatalog
+import com.s17labs.opencodelauncher.runtime.GuestSetup
 import com.s17labs.opencodelauncher.runtime.ProotRunner
 import com.s17labs.opencodelauncher.runtime.ProotSetup
 import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
@@ -69,5 +70,14 @@ class BootstrapLogicTest {
         assertTrue(cmd.contains("--bind=/proc"))
         assertTrue(cmd.contains("--bind=/dev"))
         assertTrue(cmd.takeLast(3) == listOf("/bin/sh", "-c", "echo proot-ok"))
+    }
+
+    @Test
+    fun versionLinesParse() {
+        assertEquals("v22.14.0", GuestSetup.parseVersionLine("v22.14.0\n"))
+        assertEquals("10.8.2", GuestSetup.parseVersionLine("10.8.2"))
+        assertEquals("1.2.3", GuestSetup.parseVersionLine("1.2.3 (release)"))
+        assertNull(GuestSetup.parseVersionLine("not a version"))
+        assertNull(GuestSetup.parseVersionLine(""))
     }
 }

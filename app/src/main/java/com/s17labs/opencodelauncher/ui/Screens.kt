@@ -26,7 +26,9 @@ fun SetupScreen(
     abiLabel: String,
     state: BootstrapState,
     logText: String,
+    guestStatus: String,
     onTestBootstrap: () -> Unit,
+    onInstallPackages: () -> Unit,
     onRetry: () -> Unit,
     onShareLog: () -> Unit,
     onContinue: () -> Unit
@@ -55,6 +57,10 @@ fun SetupScreen(
         Button(onClick = onTestBootstrap, modifier = Modifier.fillMaxWidth()) {
             Text("Test bootstrap (Phase 1 proof of concept)")
         }
+        OutlinedButton(onClick = onInstallPackages, modifier = Modifier.fillMaxWidth()) {
+            Text("Install Node + OpenCode (Phase 2)")
+        }
+        Text(guestStatus, style = MaterialTheme.typography.bodyMedium)
         if (state is BootstrapState.Failed && state.retryable) {
             OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
                 Text("Retry")

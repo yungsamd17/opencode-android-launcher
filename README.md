@@ -7,8 +7,10 @@ Full plan: `opencode-android-launcher-plan.md`. Agent rules: `AGENTS.md`.
 
 ## Status
 
-Phase 0 skeleton: Setup ↔ Home ↔ Settings nav, ABI detection, foreground-service stub,
-bootstrap POC entry point. Phase 1 (real proot + Alpine bootstrap) is next.
+Phase 1 done and verified on a real aarch64 phone (`proot <rootfs> /bin/sh`
+prints `proot-ok`, exit 0). Phase 2 in progress: guest `apk add nodejs npm
+git openssh` + `npm install -g opencode-ai` via the Setup screen's
+"Install Node + OpenCode" button.
 
 ## Build (CI)
 
