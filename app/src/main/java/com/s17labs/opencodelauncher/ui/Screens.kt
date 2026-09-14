@@ -22,6 +22,7 @@ import com.s17labs.opencodelauncher.runtime.BootstrapState
 fun SetupScreen(
     abiLabel: String,
     state: BootstrapState,
+    logText: String,
     onTestBootstrap: () -> Unit,
     onRetry: () -> Unit,
     onContinue: () -> Unit
@@ -53,6 +54,12 @@ fun SetupScreen(
         if (state is BootstrapState.Failed && state.retryable) {
             OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
                 Text("Retry")
+            }
+        }
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Raw log", style = MaterialTheme.typography.titleMedium)
+                Text(logText.ifBlank { "Logs appear here during bootstrap." }, style = MaterialTheme.typography.bodySmall)
             }
         }
         Spacer(modifier = Modifier.height(4.dp))

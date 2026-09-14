@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
                         SetupScreen(
                             abiLabel = abiLabel,
                             state = bootstrapState,
+                            logText = logText,
                             onTestBootstrap = { runBootstrapPoc() },
                             onRetry = { runBootstrapPoc() },
                             onContinue = { nav.navigate(Routes.HOME) }
@@ -90,25 +91,48 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Phase 1 proof-of-concept entry point (Suggested next step in the plan):
-     * debug-only "test bootstrap" that will attempt a bare
-     * `proot <alpine-rootfs> /bin/sh` via ProcessBuilder and stream raw logs.
-     * Currently reports unimplemented — Phase 1 fills this in.
+     * Phase 1 proof-of-concept (plan's suggested next step): debug-only
+     * "test bootstrap" button + raw log view. Runs the real
+     * download → verify → extract flow, then attempts a bare
+     * `proot <alpine-rootfs> /bin/sh` smoke test via ProcessBuilder.
+     * Phase 1 is NOT done until that smoke test succeeds on real aarch64.
      */
     private fun runBootstrapPoc() {
-        bootstrapState = BootstrapState.InProgress("Checking ABI…")
+        val log = StringBuilder()
+        fun append(msg: String) {
+            log.appendLine(msg)
+            val snapshot = log.toString().takeLast(4000)
+            runOnUiThread { logText = snapshot }
+        }
         io.launch {
-            val abi = RuntimeBootstrap.detectAbi()
-            runOnUiThread {
-                bootstrapState = if (abi.isSuccess) {
-                    BootstrapState.Failed(
-                        "Bootstrap POC not implemented yet (Phase 1). ABI ${abi.getOrNull()?.name} detected OK — next: download Alpine minirootfs + proot.",
-                        retryable = true
-                    )
-                } else {
-                    BootstrapState.Failed(abi.exceptionOrNull()?.message ?: "ABI check failed", retryable = false)
+            runOnUiThread { bootstrapState = BootstrapState.InProgress("Starting bootstrap…") }
+            append("ABI: ${(Build.SUPPORTED_ABIS?.joinToString() ?: "?")}")
+            if (RuntimeBootstrap.isBootstrapDone(filesDir)) {
+                append("Marker present — rootfs already extracted, running proot smoke test…")
+            }
+            val final = RuntimeBootstrap.bootstrap(filesDir) { s ->
+                runOnUiThread { bootstrapState = s }
+                if (s is BootstrapState.InProgress) append(s.stepLabel)
+            }
+            runOnUiThread { bootstrapState = final }
+            when (final) {
+                is BootstrapState.Ready -> {
+                    append("Rootfs ready. Looking for proot binary…")
+                    val smoke = RuntimeBootstrap.prootSmokeTest(filesDir, nativeLibDir = applicationInfo.nativeLibraryDir?.let { java.io.File(it) })
+                    if (smoke == null) {
+                        append("No proot binary found yet (expected — Phase 1 still needs the Termux-built proot binary). Rootfs extract OK.")
+                        runOnUiThread {
+                            bootstrapState = BootstrapState.Failed(
+                                "Rootfs extracted, but no proot binary yet — next: bundle a Termux-built proot and re-run smoke test.",
+                                retryable = true
+                            )
+                        }
+                    } else {
+                        append("proot exit=${smoke.exitCode} stdout=${smoke.stdout.trim().take(300)} stderr=${smoke.stderr.trim().take(300)}")
+                    }
                 }
-                logText = "ABI check: ${abi.fold({ it.name }, { "FAILED: ${it.message}" })}"
+                is BootstrapState.Failed -> append("FAILED: ${final.message}")
+                else -> {}
             }
         }
     }

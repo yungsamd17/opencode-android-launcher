@@ -1,12 +1,53 @@
 package com.s17labs.opencodelauncher
 
+import com.s17labs.opencodelauncher.runtime.AlpineCatalog
+import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
+import com.s17labs.opencodelauncher.runtime.Sha256
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BootstrapLogicTest {
+
     @Test
-    fun placeholder_passes() {
-        // Phase 1 adds real unit tests (ABI mapping, checksum parsing, state machine).
-        assertTrue(true)
+    fun abiPrefersArm64() {
+        val res = RuntimeBootstrap.mapAbis(listOf("arm64-v8a", "armeabi-v7a"))
+        assertEquals(RuntimeBootstrap.Abi.ARM64, res.getOrThrow())
+    }
+
+    @Test
+    fun abiFallsBackToX86_64() {
+        val res = RuntimeBootstrap.mapAbis(listOf("x86_64", "x86"))
+        assertEquals(RuntimeBootstrap.Abi.X86_64, res.getOrThrow())
+    }
+
+    @Test
+    fun abiFailsClearlyWhenUnsupported() {
+        val res = RuntimeBootstrap.mapAbis(listOf("armeabi-v7a"))
+        assertTrue(res.isFailure)
+        assertTrue(res.exceptionOrNull()!!.message!!.contains("Unsupported ABI"))
+    }
+
+    @Test
+    fun alpineUrlsFollowCdnPattern() {
+        val url = AlpineCatalog.tarballUrl(RuntimeBootstrap.Abi.ARM64)
+        assertEquals(
+            "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/aarch64/alpine-minirootfs-3.23.3-aarch64.tar.gz",
+            url
+        )
+        val x86 = AlpineCatalog.tarballUrl(RuntimeBootstrap.Abi.X86_64)
+        assertTrue(x86.endsWith("alpine-minirootfs-3.23.3-x86_64.tar.gz"))
+        assertEquals("$url.sha256", AlpineCatalog.sha256Url(RuntimeBootstrap.Abi.ARM64))
+    }
+
+    @Test
+    fun shaSidecarParsesBothForms() {
+        assertEquals(
+            "a".repeat(64),
+            Sha256.parseSidecar("a".repeat(64) + "  alpine-minirootfs-3.23.3-aarch64.tar.gz")
+        )
+        assertEquals("b".repeat(64), Sha256.parseSidecar("B".repeat(64) + "\n"))
+        assertNull(Sha256.parseSidecar("not-a-hash"))
     }
 }

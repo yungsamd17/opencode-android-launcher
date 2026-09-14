@@ -7,13 +7,22 @@ This project will adapt bootstrap logic from:
 - `termux/proot-distro` — Alpine plugin script, rootfs URLs + checksums (GPLv3)
   https://github.com/termux/proot-distro
 
-## Phase 0 status
+## Phase 1 status
 
-No GPLv3-derived code is vendored yet. When Phase 1 ports that logic:
+No verbatim GPLv3 code is vendored yet. The download → verify → extract flow in
+`RuntimeBootstrap.kt` follows the same steps as:
 
-- Keep a comment header in each adapted file noting origin (repo + file path + commit)
-- List the exact files/commits here
-- Keep the repo public under GPLv3 (`LICENSE`)
+- `termux/termux-app` — `app/src/main/java/com/termux/app/TermuxInstaller.java`
+  (staging dir, checksum verification, atomic rename; master as of 2026-09-14)
+  https://github.com/termux/termux-app/blob/master/app/src/main/java/com/termux/app/TermuxInstaller.java
+- `termux/proot-distro` — `distro-build/alpine.sh` + `build-recipes/alpine.yaml`
+  (Alpine minirootfs CDN URL pattern, `.sha256` sidecar, tmp-file download;
+  Alpine 3.23.3; commit 43a79f8c / 2026-04-03 recipe)
+  https://github.com/termux/proot-distro/blob/43a79f8c/distro-build/alpine.sh
+
+Only the URL pattern + procedural steps (facts/ideas) are used — all Kotlin here
+is original glue. If verbatim adaptation lands later, it will carry a GPLv3
+origin header in-file and be listed here with exact commits.
 
 Original code in this project (Compose UI, service, Kotlin glue not derived from
 Termux) is part of the combined GPLv3-covered app on distribution.
