@@ -11,9 +11,14 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-    <!-- Phase 5 needs real filesystem paths for bind-mount into proot.
-         SAF URIs can't be bind-mounted. Shipped later via F-Droid/direct APK first. -->
-    <!-- <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" /> -->
+    <!-- Phase 5: opencode runs natively and needs a real folder path to
+         bind-mount into proot — SAF content:// URIs can't be bind-mounted.
+         Extra Play Store scrutiny applies, so we ship direct APK / F-Droid
+         first (see plan Phase 5). Legacy read/write below cover pre-R
+         devices only (minSdk 26). -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
     <application
         android:allowBackup="true"

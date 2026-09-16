@@ -23,8 +23,11 @@ import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
 import com.s17labs.opencodelauncher.service.OpenCodeForegroundService
 import com.s17labs.opencodelauncher.service.OpenCodeStatus
 import com.s17labs.opencodelauncher.service.Power
+import com.s17labs.opencodelauncher.storage.ProjectStore
+import com.s17labs.opencodelauncher.storage.StorageAccess
 import com.s17labs.opencodelauncher.ui.HomeScreen
 import com.s17labs.opencodelauncher.ui.OpenCodeLauncherTheme
+import com.s17labs.opencodelauncher.ui.ProjectScreen
 import com.s17labs.opencodelauncher.ui.SettingsScreen
 import com.s17labs.opencodelauncher.ui.SetupScreen
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +37,7 @@ import kotlinx.coroutines.launch
 object Routes {
     const val SETUP = "setup"
     const val HOME = "home"
+    const val PROJECT = "project"
     const val SETTINGS = "settings"
 }
 
@@ -43,12 +47,19 @@ class MainActivity : ComponentActivity() {
     private var guestStatus: String by mutableStateOf("Packages: not installed")
     private var batteryExempt: Boolean by mutableStateOf(false)
     private var serviceLog: String by mutableStateOf("")
+    private var projectLabel: String by mutableStateOf("Guest home — no folder picked")
+    private var hasStorageAccess: Boolean by mutableStateOf(false)
     private var logText: String by mutableStateOf("Phase 2 done (opencode 1.18.30 on-device). Phase 3 runs it as a service.")
     private val io = CoroutineScope(Dispatchers.IO)
 
     private val notifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* result only gates the notification shade, not the service */ }
+
+    /** All-files-access settings screen returns no meaningful result — refresh on return. */
+    private val storageGrant = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { refreshDerivedState() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -94,11 +105,31 @@ class MainActivity : ComponentActivity() {
                             status = statusText,
                             boundUrl = boundUrl,
                             detail = detail,
+                            projectLabel = projectLabel,
                             onOpenOpenCode = { openInBrowser(boundUrl) },
                             onStartService = { startOpencodeService() },
                             onStopService = { stopOpencodeService() },
+                            onChangeProject = { nav.navigate(Routes.PROJECT) },
                             onGoSetup = { nav.navigate(Routes.SETUP) },
                             onGoSettings = { nav.navigate(Routes.SETTINGS) }
+                        )
+                    }
+                    composable(Routes.PROJECT) {
+                        ProjectScreen(
+                            root = StorageAccess.sharedRoot(),
+                            current = ProjectStore.get(this@MainActivity),
+                            onPick = { dir ->
+                                ProjectStore.set(this@MainActivity, dir)
+                                refreshDerivedState()
+                                nav.popBackStack()
+                            },
+                            onGrantStorage = {
+                                try {
+                                    storageGrant.launch(StorageAccess.requestIntent(this@MainActivity))
+                                } catch (_: Exception) {}
+                            },
+                            hasAccess = hasStorageAccess,
+                            onBack = { nav.popBackStack() }
                         )
                     }
                     composable(Routes.SETTINGS) {
@@ -244,6 +275,11 @@ class MainActivity : ComponentActivity() {
                 if (m.exists()) "Packages: ${m.readText().trim()}" else "Packages: not installed"
             } catch (_: Exception) { "Packages: unknown" }
             val exempt = Power.isExempt(this@MainActivity)
+            val access = try {
+                StorageAccess.hasFullAccess(this@MainActivity)
+            } catch (_: Exception) { false }
+            val project = ProjectStore.get(this@MainActivity)?.absolutePath
+                ?: "Guest home — no folder picked"
             val slog = try {
                 val f = java.io.File(filesDir, "opencode-service.log")
                 if (f.exists()) f.readText().takeLast(4000) else ""
@@ -251,6 +287,8 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 guestStatus = guest
                 batteryExempt = exempt
+                hasStorageAccess = access
+                projectLabel = project
                 serviceLog = slog
             }
         }

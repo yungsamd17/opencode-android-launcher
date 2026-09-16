@@ -91,14 +91,16 @@ fun HomeScreen(
     status: String,
     boundUrl: String?,
     detail: String? = null,
+    projectLabel: String,
     onOpenOpenCode: () -> Unit,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
+    onChangeProject: () -> Unit,
     onGoSetup: () -> Unit,
     onGoSettings: () -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("OpenCode Launcher", style = MaterialTheme.typography.headlineMedium)
@@ -117,6 +119,15 @@ fun HomeScreen(
         }
         OutlinedButton(onClick = onStopService, modifier = Modifier.fillMaxWidth()) {
             Text("Stop service")
+        }
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Project", style = MaterialTheme.typography.titleMedium)
+                Text(projectLabel, style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = onChangeProject, modifier = Modifier.fillMaxWidth()) {
+                    Text("Change project folder")
+                }
+            }
         }
         OutlinedButton(onClick = onGoSetup, modifier = Modifier.fillMaxWidth()) {
             Text("Setup")
