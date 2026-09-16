@@ -15,7 +15,9 @@ persistent notification, and an "Open OpenCode" browser handoff.
 Phase 5a/5b done: all-files access grant + project folder picker, and the
 service bind-mounts the picked folder into the guest at `/project` and
 runs opencode there (falls back to guest home when none is picked).
-Remaining in Phase 5: git auth (`gh` device flow or SSH key).
+Phase 5 done: `github-cli` installs inside the guest and GitHub login uses
+the device-code flow (one-time code + browser link on the GitHub screen) —
+opencode's agent runs git itself from there.
 
 ## Build (CI)
 
