@@ -16,6 +16,9 @@ import com.s17labs.opencodelauncher.runtime.GuestSetup
 import com.s17labs.opencodelauncher.runtime.ProotRunner
 import com.s17labs.opencodelauncher.runtime.ProotSetup
 import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
+import com.s17labs.opencodelauncher.storage.ProjectMount
+import com.s17labs.opencodelauncher.storage.ProjectStore
+import com.s17labs.opencodelauncher.storage.StorageAccess
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -166,15 +169,45 @@ class OpenCodeForegroundService : Service() {
             return null
         }
         val rootfs = RuntimeBootstrap.rootfsDir(filesDir)
+        // Phase 5b: work inside the user's project folder when one is picked —
+        // bind-mount the shared-storage path into the guest at /project so
+        // opencode edits real files other apps can also see. No project yet
+        // means guest home, exactly like Phase 3. A stale pick is a hard
+        // failure with a re-pick hint, never a silent wrong directory.
+        val mount = ProjectMount.resolve(
+            ProjectStore.get(this),
+            StorageAccess.hasFullAccess(this)
+        )
+        if (mount is ProjectMount.Mount.Invalid) {
+            OpenCodeStatus.set(OpenCodeStatus.Value.Failed(mount.reason))
+            return null
+        }
+        val binds = if (mount is ProjectMount.Mount.Bound) {
+            try {
+                File(rootfs, ProjectMount.GUEST_PATH.trimStart('/')).mkdirs()
+            } catch (_: Exception) {}
+            ProjectMount.bindsFor(mount)
+        } else {
+            emptyMap()
+        }
+        val workdir = ProjectMount.guestWorkdir(mount)
         val guestSh =
             "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; " +
-                "export HOME=/root; mkdir -p /root; cd /root; " +
+                "export HOME=/root; mkdir -p /root; cd $workdir; " +
                 "exec opencode web --hostname $HOST --port $PORT"
         val cmd = ProotRunner.buildCommand(
             resolved.proot, rootfs,
+            binds = binds,
             guestCmd = listOf("/bin/sh", "-c", guestSh)
         )
-        appendServiceLog("$ opencode web --hostname $HOST --port $PORT")
+        appendServiceLog(
+            when (mount) {
+                is ProjectMount.Mount.Bound ->
+                    "$ opencode web --hostname $HOST --port $PORT " +
+                        "(project ${mount.hostDir.absolutePath} → ${ProjectMount.GUEST_PATH})"
+                else -> "$ opencode web --hostname $HOST --port $PORT (no project — guest home)"
+            }
+        )
         val pb = ProcessBuilder(cmd)
         pb.environment().remove("LD_PRELOAD")
         pb.environment().putAll(resolved.env)
