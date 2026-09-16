@@ -32,6 +32,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Default is "tools platform-tools", but the "tools" package was
+          # removed from Google's repo (sdkmanager: "Failed to find package
+          # 'tools'") — platform-tools alone is all this step needs.
+          packages: platform-tools
 
       - name: Set up Gradle caching
         uses: gradle/actions/setup-gradle@v4
