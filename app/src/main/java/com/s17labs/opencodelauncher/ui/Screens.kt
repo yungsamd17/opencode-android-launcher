@@ -31,6 +31,7 @@ fun SetupScreen(
     onInstallPackages: () -> Unit,
     onRetry: () -> Unit,
     onShareLog: () -> Unit,
+    onGoGit: () -> Unit,
     onContinue: () -> Unit
 ) {
     Column(
@@ -61,6 +62,9 @@ fun SetupScreen(
             Text("Install Node + OpenCode (Phase 2)")
         }
         Text(guestStatus, style = MaterialTheme.typography.bodyMedium)
+        OutlinedButton(onClick = onGoGit, modifier = Modifier.fillMaxWidth()) {
+            Text("GitHub / git auth (Phase 5)")
+        }
         if (state is BootstrapState.Failed && state.retryable) {
             OutlinedButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
                 Text("Retry")

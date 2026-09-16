@@ -33,6 +33,30 @@ object GuestSetup {
 
     fun isDone(filesDir: File): Boolean = markerFile(filesDir).exists()
 
+    /**
+     * Shared guest shell preamble (also used by [GitSetup][com.s17labs.opencodelauncher.runtime.GitSetup]):
+     * proot inherits the app's minimal PATH (no /sbin), while apk lives at
+     * /sbin/apk — set the standard Alpine root PATH first. npm/node/gh also
+     * need HOME pointing at a real guest dir (uv_os_homedir ENOENT otherwise —
+     * the inherited host HOME doesn't exist inside the rootfs).
+     */
+    fun guestShell(sh: String): List<String> = listOf(
+        "/bin/sh", "-c",
+        "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; " +
+            "export HOME=/root; mkdir -p /root /tmp; $sh"
+    )
+
+    /** apk needs a resolver; the minirootfs may ship an empty one. Best-effort. */
+    fun ensureResolv(rootfs: File) {
+        try {
+            val resolv = File(rootfs, "etc/resolv.conf")
+            if (!resolv.exists() || resolv.readText().isBlank()) {
+                resolv.parentFile?.mkdirs()
+                resolv.writeText("nameserver 1.1.1.1\n")
+            }
+        } catch (_: Exception) {}
+    }
+
     /** Parse `node --version` style output ("v22.14.0") — null when unparseable. */
     fun parseVersionLine(output: String): String? {
         val token = output.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
@@ -58,25 +82,9 @@ object GuestSetup {
             }
             val rootfs = RuntimeBootstrap.rootfsDir(ctx.filesDir)
 
-            // apk needs a resolver; minirootfs may ship an empty one.
-            try {
-                val resolv = File(rootfs, "etc/resolv.conf")
-                if (!resolv.exists() || resolv.readText().isBlank()) {
-                    resolv.parentFile?.mkdirs()
-                    resolv.writeText("nameserver 1.1.1.1\n")
-                }
-            } catch (_: Exception) {}
+            ensureResolv(rootfs)
 
-            fun guest(sh: String) = listOf(
-                "/bin/sh", "-c",
-                // proot inherits the app's minimal PATH (no /sbin), while apk
-                // lives at /sbin/apk — set the standard Alpine root PATH first.
-                // npm/node also need HOME pointing at a real guest dir
-                // (uv_os_homedir ENOENT otherwise — the inherited host HOME
-                // doesn't exist inside the rootfs).
-                "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; " +
-                    "export HOME=/root; mkdir -p /root /tmp; $sh"
-            )
+            fun guest(sh: String) = guestShell(sh)
 
             val steps = listOf(
                 Step("Updating apk index…", guest("apk update"), 180),

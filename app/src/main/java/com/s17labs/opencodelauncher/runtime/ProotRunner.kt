@@ -48,9 +48,52 @@ object ProotRunner {
         workDir: File? = null,
         timeoutSec: Long = 30,
         extraEnv: Map<String, String> = emptyMap()
+    ): Result = execInternal(cmd, stdinText = null, workDir, timeoutSec, extraEnv)
+
+    /**
+     * Like [exec] but feeds [stdinText] to the process (for scripted
+     * interactive prompts such as `gh auth login` — Phase 5 git auth).
+     * Stdin is written fully, then closed, before waiting — callers must keep
+     * the script short so nothing blocks on a full pipe.
+     */
+    fun execWithStdin(
+        cmd: List<String>,
+        stdinText: String,
+        workDir: File? = null,
+        timeoutSec: Long = 600,
+        extraEnv: Map<String, String> = emptyMap()
+    ): Result = execInternal(cmd, stdinText = stdinText, workDir, timeoutSec, extraEnv)
+
+    private fun execInternal(
+        cmd: List<String>,
+        stdinText: String?,
+        workDir: File?,
+        timeoutSec: Long,
+        extraEnv: Map<String, String>
     ): Result {
         // Never throw: callers run on a bare coroutine with no handler, and a
         // spawn failure (e.g. EACCES) must land in the UI, not in a crash box.
+        return try {
+            execStreaming(cmd, stdinText, workDir, timeoutSec, extraEnv)
+        } catch (e: Exception) {
+            Result(-1, "", "exec failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Full-duplex variant: feeds [stdinText], and calls [onLine] for every
+     * output line **as it arrives** ("out"/"err" tag) — the device-code flow
+     * needs the code live, while the process is still polling. [onLine] runs
+     * on pump threads; callers must thread-hop themselves. Never throws.
+     */
+    fun execStreaming(
+        cmd: List<String>,
+        stdinText: String? = null,
+        workDir: File? = null,
+        timeoutSec: Long = 600,
+        extraEnv: Map<String, String> = emptyMap(),
+        onLine: (stream: String, line: String) -> Unit = { _, _ -> }
+    ): Result {
         try {
             val pb = ProcessBuilder(cmd).redirectErrorStream(false)
             if (workDir != null) pb.directory(workDir)
@@ -61,9 +104,23 @@ object ProotRunner {
             val proc = pb.start()
         val stdout = StringBuilder()
         val stderr = StringBuilder()
-        val tOut = Thread { try { proc.inputStream.bufferedReader().forEachLine { stdout.appendLine(it) } } catch (_: Exception) {} }
-        val tErr = Thread { try { proc.errorStream.bufferedReader().forEachLine { stderr.appendLine(it) } } catch (_: Exception) {} }
-        tOut.start(); tErr.start()
+        fun pump(stream: java.io.InputStream, tag: String) {
+            try {
+                stream.bufferedReader().forEachLine { line ->
+                    if (tag == "out") stdout.appendLine(line) else stderr.appendLine(line)
+                    try {
+                        onLine(tag, line)
+                    } catch (_: Exception) {}
+                }
+            } catch (_: Exception) {}
+        }
+        val tOut = Thread({ pump(proc.inputStream, "out") }, "proot-stdout").apply { isDaemon = true; start() }
+        val tErr = Thread({ pump(proc.errorStream, "err") }, "proot-stderr").apply { isDaemon = true; start() }
+        if (stdinText != null) {
+            try {
+                proc.outputStream.bufferedWriter().use { it.write(stdinText) }
+            } catch (_: Exception) {}
+        }
         val finished = proc.waitFor(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
         if (!finished) {
             proc.destroyForcibly()

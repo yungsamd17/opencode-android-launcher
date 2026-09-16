@@ -18,6 +18,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.s17labs.opencodelauncher.runtime.BootstrapState
+import com.s17labs.opencodelauncher.runtime.GitAuth
+import com.s17labs.opencodelauncher.runtime.GitSetup
 import com.s17labs.opencodelauncher.runtime.GuestSetup
 import com.s17labs.opencodelauncher.runtime.RuntimeBootstrap
 import com.s17labs.opencodelauncher.service.OpenCodeForegroundService
@@ -26,6 +28,7 @@ import com.s17labs.opencodelauncher.service.Power
 import com.s17labs.opencodelauncher.storage.ProjectStore
 import com.s17labs.opencodelauncher.storage.StorageAccess
 import com.s17labs.opencodelauncher.ui.HomeScreen
+import com.s17labs.opencodelauncher.ui.GitScreen
 import com.s17labs.opencodelauncher.ui.OpenCodeLauncherTheme
 import com.s17labs.opencodelauncher.ui.ProjectScreen
 import com.s17labs.opencodelauncher.ui.SettingsScreen
@@ -38,6 +41,7 @@ object Routes {
     const val SETUP = "setup"
     const val HOME = "home"
     const val PROJECT = "project"
+    const val GIT = "git"
     const val SETTINGS = "settings"
 }
 
@@ -49,6 +53,11 @@ class MainActivity : ComponentActivity() {
     private var serviceLog: String by mutableStateOf("")
     private var projectLabel: String by mutableStateOf("Guest home — no folder picked")
     private var hasStorageAccess: Boolean by mutableStateOf(false)
+    private var ghStatus: String by mutableStateOf("GitHub: CLI not installed")
+    private var ghAuthed: Boolean by mutableStateOf(false)
+    private var ghBusyLabel: String? by mutableStateOf(null)
+    private var ghCode: String? by mutableStateOf(null)
+    private var ghUrl: String? by mutableStateOf(null)
     private var logText: String by mutableStateOf("Phase 2 done (opencode 1.18.30 on-device). Phase 3 runs it as a service.")
     private val io = CoroutineScope(Dispatchers.IO)
 
@@ -97,6 +106,7 @@ class MainActivity : ComponentActivity() {
                             onInstallPackages = { runGuestSetup() },
                             onRetry = { runBootstrapPoc() },
                             onShareLog = { shareLog() },
+                            onGoGit = { nav.navigate(Routes.GIT) },
                             onContinue = { nav.navigate(Routes.HOME) }
                         )
                     }
@@ -129,6 +139,20 @@ class MainActivity : ComponentActivity() {
                                 } catch (_: Exception) {}
                             },
                             hasAccess = hasStorageAccess,
+                            onBack = { nav.popBackStack() }
+                        )
+                    }
+                    composable(Routes.GIT) {
+                        GitScreen(
+                            ghStatus = ghStatus,
+                            authed = ghAuthed,
+                            busyLabel = ghBusyLabel,
+                            deviceCode = ghCode,
+                            deviceUrl = ghUrl,
+                            onInstallGh = { runGitSetup() },
+                            onConnect = { runGitLogin() },
+                            onOpenDeviceUrl = { openInBrowser(ghUrl) },
+                            onLogout = { runGitLogout() },
                             onBack = { nav.popBackStack() }
                         )
                     }
@@ -262,6 +286,77 @@ class MainActivity : ComponentActivity() {
         runOnUiThread { logText = (logText + "\n" + msg).takeLast(6000) }
     }
 
+    /** Phase 5 (git auth): install `github-cli` inside the guest. Idempotent. */
+    private fun runGitSetup() {
+        io.launch {
+            runOnUiThread { ghBusyLabel = "Installing GitHub CLI…" }
+            try {
+                val final = GitSetup.install(
+                    this@MainActivity,
+                    onState = { s ->
+                        if (s is BootstrapState.InProgress) runOnUiThread { ghBusyLabel = s.stepLabel }
+                    },
+                    onLog = { appendLog(it) }
+                )
+                if (final is BootstrapState.Failed) appendLog("GitHub CLI: ${final.message}")
+            } catch (e: Exception) {
+                appendLog("GitHub CLI install crashed: ${e.message}")
+            }
+            runOnUiThread { ghBusyLabel = null }
+            refreshDerivedState()
+        }
+    }
+
+    /** Phase 5 (git auth): device-code login — code + link appear on GitScreen. */
+    private fun runGitLogin() {
+        io.launch {
+            runOnUiThread {
+                ghBusyLabel = "Waiting for browser approval…"
+                ghCode = null
+                ghUrl = null
+            }
+            try {
+                val st = GitAuth.login(
+                    this@MainActivity,
+                    onLog = { appendLog(it) },
+                    onDeviceFlow = { flow ->
+                        runOnUiThread {
+                            ghCode = flow.code
+                            ghUrl = flow.url
+                        }
+                    }
+                )
+                if (st.authed) {
+                    appendLog("GitHub: ${st.summary}")
+                    runOnUiThread {
+                        ghCode = null
+                        ghUrl = null
+                    }
+                } else {
+                    appendLog("GitHub: ${st.summary}")
+                }
+            } catch (e: Exception) {
+                appendLog("GitHub login crashed: ${e.message}")
+            }
+            runOnUiThread { ghBusyLabel = null }
+            refreshDerivedState()
+        }
+    }
+
+    private fun runGitLogout() {
+        io.launch {
+            runOnUiThread { ghBusyLabel = "Logging out…" }
+            try {
+                val st = GitAuth.logout(this@MainActivity, onLog = { appendLog(it) })
+                appendLog("GitHub: ${st.summary}")
+            } catch (e: Exception) {
+                appendLog("GitHub logout crashed: ${e.message}")
+            }
+            runOnUiThread { ghBusyLabel = null }
+            refreshDerivedState()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         refreshDerivedState()
@@ -280,6 +375,19 @@ class MainActivity : ComponentActivity() {
             } catch (_: Exception) { false }
             val project = ProjectStore.get(this@MainActivity)?.absolutePath
                 ?: "Guest home — no folder picked"
+            // GitHub status: file markers first (cheap), then one proot probe
+            // only when the CLI is actually installed.
+            val (gh, authed) = try {
+                if (GitSetup.isDone(filesDir)) {
+                    val ver = GitSetup.installedVersion(filesDir) ?: "?"
+                    val auth = GitAuth.status(this@MainActivity) {}
+                    "GitHub CLI: $ver · ${auth.summary}" to auth.authed
+                } else {
+                    "GitHub: CLI not installed" to false
+                }
+            } catch (_: Exception) {
+                "GitHub: unknown" to false
+            }
             val slog = try {
                 val f = java.io.File(filesDir, "opencode-service.log")
                 if (f.exists()) f.readText().takeLast(4000) else ""
@@ -289,6 +397,8 @@ class MainActivity : ComponentActivity() {
                 batteryExempt = exempt
                 hasStorageAccess = access
                 projectLabel = project
+                ghStatus = gh
+                ghAuthed = authed
                 serviceLog = slog
             }
         }
