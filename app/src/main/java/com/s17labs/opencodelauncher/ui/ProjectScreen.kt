@@ -90,56 +90,63 @@ private fun ProjectBrowser(
         }
     }
 
-    Text(path.absolutePath, style = MaterialTheme.typography.bodySmall)
-    if (!readable) {
-        Text("Cannot read this folder.", style = MaterialTheme.typography.bodyMedium)
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(
-            onClick = { path.parentFile?.let { path = it } },
-            enabled = path.absolutePath != root.absolutePath && path.parentFile != null,
-            modifier = Modifier.weight(1f)
-        ) { Text("Up") }
-        Button(onClick = { onPick(path) }, modifier = Modifier.weight(2f)) {
-            Text("Use this folder")
+    // Column parent: lays the browser out top-to-bottom and provides the
+    // ColumnScope that Modifier.weight (list takes remaining space) needs.
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(path.absolutePath, style = MaterialTheme.typography.bodySmall)
+        if (!readable) {
+            Text("Cannot read this folder.", style = MaterialTheme.typography.bodyMedium)
         }
-    }
-    OutlinedTextField(
-        value = newName,
-        onValueChange = { newName = it },
-        label = { Text("New folder name") },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth()
-    )
-    Button(
-        onClick = {
-            val name = newName.trim()
-            if (name.isNotEmpty() && !name.contains("/")) {
-                val created = File(path, name)
-                if (created.mkdirs() || created.isDirectory) {
-                    newName = ""
-                    path = created
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = { path.parentFile?.let { path = it } },
+                enabled = path.absolutePath != root.absolutePath && path.parentFile != null,
+                modifier = Modifier.weight(1f)
+            ) { Text("Up") }
+            Button(onClick = { onPick(path) }, modifier = Modifier.weight(2f)) {
+                Text("Use this folder")
+            }
+        }
+        OutlinedTextField(
+            value = newName,
+            onValueChange = { newName = it },
+            label = { Text("New folder name") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Button(
+            onClick = {
+                val name = newName.trim()
+                if (name.isNotEmpty() && !name.contains("/")) {
+                    val created = File(path, name)
+                    if (created.mkdirs() || created.isDirectory) {
+                        newName = ""
+                        path = created
+                    }
+                }
+            },
+            enabled = newName.trim().isNotEmpty(),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Create + open") }
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(entries, key = { it.absolutePath }) { dir ->
+                Card(modifier = Modifier.fillMaxWidth().clickable { path = dir }) {
+                    Text(
+                        "📁 " + dir.name,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
-        },
-        enabled = newName.trim().isNotEmpty(),
-        modifier = Modifier.fillMaxWidth()
-    ) { Text("Create + open") }
-    LazyColumn(
-        modifier = Modifier.fillMaxWidth().weight(1f),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        items(entries, key = { it.absolutePath }) { dir ->
-            Card(modifier = Modifier.fillMaxWidth().clickable { path = dir }) {
-                Text(
-                    "📁 " + dir.name,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
         }
-    }
-    OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
-        Text("Back")
+        OutlinedButton(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+            Text("Back")
+        }
     }
 }
